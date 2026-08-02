@@ -1,0 +1,26 @@
+# deps
+node_modules/
+.venv/
+venv/
+
+# next
+.next/
+out/
+next-env.d.ts
+
+# env / secrets
+.env
+.env.local
+.env*.local
+*.pem
+
+# python
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# misc
+.DS_Store
+*.log
+.vercel

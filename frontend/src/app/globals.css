@@ -1,0 +1,86 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ============================================================
+   DataScope design tokens (locked — do not deviate)
+   ============================================================ */
+:root {
+  --color-bg-primary: #0b0e11; /* 60% dominant background */
+  --color-bg-secondary: #151a21; /* 30% cards, panels */
+  --color-border: #232a33;
+  --color-text-primary: #f5f7fa;
+  --color-text-muted: #8a94a3;
+  --color-accent: #00d4ff; /* 10% CTAs, active states, chart highlights ONLY */
+
+  --radius: 0.75rem;
+}
+
+/* Tailwind mapping. Hex values are used directly so contrast stays exact. */
+@layer base {
+  :root {
+    --background: 0 0% 5%; /* #0B0E11 */
+    --surface: 0 0% 9%; /* #151A21 */
+    --foreground: 0 0% 97%; /* #F5F7FA */
+    --muted: 220 10% 59%; /* #8A94A3 */
+    --border: 216 18% 17%; /* #232A33 */
+    --accent: 190 100% 50%; /* #00D4FF */
+    --accent-foreground: 210 20% 4%; /* dark text on accent */
+  }
+
+  * {
+    @apply border-border;
+  }
+
+  html {
+    scroll-behavior: smooth;
+  }
+
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    background-color: #0b0e11;
+    line-height: 1.6;
+  }
+
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-heading;
+    line-height: 1.2;
+  }
+
+  ::selection {
+    background-color: rgba(0, 212, 255, 0.25);
+    color: #f5f7fa;
+  }
+}
+
+@layer components {
+  .container-page {
+    @apply mx-auto w-full max-w-6xl px-6 md:px-8;
+  }
+
+  /* Section padding: 120px desktop / 64px mobile — locked. */
+  .section-padding {
+    @apply py-16 md:py-[120px];
+  }
+
+  .card-panel {
+    background-color: #151a21;
+    border: 1px solid #232a33;
+    border-radius: var(--radius);
+  }
+
+  /* Accent is reserved for CTAs / active states / chart highlights. */
+  .btn-accent {
+    @apply inline-flex items-center justify-center gap-2 rounded-md font-medium transition-colors;
+    background-color: #00d4ff;
+    color: #0b0e11;
+    padding: 0.75rem 1.5rem;
+  }
+  .btn-accent:hover {
+    background-color: #29ddff;
+  }
+
+  .text-muted {
+    color: #8a94a3;
+  }
+}
