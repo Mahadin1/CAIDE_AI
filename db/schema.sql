@@ -13,6 +13,7 @@ create extension if not exists pgcrypto;
 create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
+  name text,
   plan text not null default 'free' check (plan in ('free', 'pro')),
   reports_this_month int not null default 0,
   created_at timestamptz not null default now()
@@ -148,8 +149,14 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, plan, reports_this_month)
-  values (new.id, coalesce(new.email, ''), 'free', 0)
+  insert into public.profiles (id, email, name, plan, reports_this_month)
+  values (
+    new.id,
+    coalesce(new.email, ''),
+    nullif(new.raw_user_meta_data ->> 'name', ''),
+    'free',
+    0
+  )
   on conflict (id) do nothing;
   insert into public.subscriptions (user_id, status)
   values (new.id, 'inactive')
@@ -204,36 +211,38 @@ values ('reports', 'reports', false)
 on conflict (id) do nothing;
 
 -- Storage policy: users can only touch their own paths (uploads/<user_id>/...)
+-- storage.foldername returns the folder path as an array (indexed from 1), so
+-- [1] is the leading "uploads" folder and [2] is the owning user id.
 drop policy if exists "uploads_read_own" on storage.objects;
 create policy "uploads_read_own"
   on storage.objects for select
-  using (bucket_id = 'uploads' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text);
 
 drop policy if exists "uploads_insert_own" on storage.objects;
 create policy "uploads_insert_own"
   on storage.objects for insert
-  with check (bucket_id = 'uploads' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (bucket_id = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text);
 
 drop policy if exists "uploads_update_own" on storage.objects;
 create policy "uploads_update_own"
   on storage.objects for update
-  using (bucket_id = 'uploads' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text);
 
 drop policy if exists "uploads_delete_own" on storage.objects;
 create policy "uploads_delete_own"
   on storage.objects for delete
-  using (bucket_id = 'uploads' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'uploads' and (storage.foldername(name))[2] = auth.uid()::text);
 
 -- Storage policy: generated PDFs live under reports/<user_id>/... and are private.
 drop policy if exists "reports_read_own" on storage.objects;
 create policy "reports_read_own"
   on storage.objects for select
-  using (bucket_id = 'reports' and (storage.foldername(name))[1] = auth.uid()::text);
+  using (bucket_id = 'reports' and (storage.foldername(name))[2] = auth.uid()::text);
 
 drop policy if exists "reports_insert_own" on storage.objects;
 create policy "reports_insert_own"
   on storage.objects for insert
-  with check (bucket_id = 'reports' and (storage.foldername(name))[1] = auth.uid()::text);
+  with check (bucket_id = 'reports' and (storage.foldername(name))[2] = auth.uid()::text);
 
 -- ============================================================
 -- Service role helpers (used by the backend via service key):

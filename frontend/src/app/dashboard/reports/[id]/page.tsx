@@ -67,6 +67,9 @@ export default async function ReportPage({
               Analyzed {formatDate(report.created_at)} ·{" "}
               {summary.shape.rows.toLocaleString()} rows ×{" "}
               {summary.shape.columns} columns
+              {summary.duplicate_count > 0 && (
+                <> · {summary.duplicate_count.toLocaleString()} duplicate rows</>
+              )}
             </p>
           </div>
           {isPro && (
@@ -107,15 +110,22 @@ export default async function ReportPage({
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-wrap gap-2">
-          {Object.entries(summary.dtypes).map(([col, dtype]) => (
-            <div
-              key={col}
-              className="flex items-center gap-2 rounded-md border border-[#232a33] bg-[#1b2230] px-3 py-1.5"
-            >
-              <span className="text-sm text-foreground">{col}</span>
-              <span className="text-xs text-muted">{dtype}</span>
-            </div>
-          ))}
+          {Object.entries(summary.dtypes).map(([col, dtype]) => {
+            const kind = summary.column_classification?.[col]?.kind;
+            const label =
+              kind && kind !== "categorical" && kind !== "numeric"
+                ? `${dtype} · ${kind.replace("_", " ")}`
+                : dtype;
+            return (
+              <div
+                key={col}
+                className="flex items-center gap-2 rounded-md border border-[#232a33] bg-[#1b2230] px-3 py-1.5"
+              >
+                <span className="text-sm text-foreground">{col}</span>
+                <span className="text-xs text-muted">{label}</span>
+              </div>
+            );
+          })}
         </CardContent>
       </Card>
 

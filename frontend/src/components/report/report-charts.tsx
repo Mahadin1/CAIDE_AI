@@ -271,7 +271,18 @@ function CategoricalChart({
 /* Auto-selection wrapper — only charts relevant to flagged findings   */
 /* ------------------------------------------------------------------ */
 
+// Columns the classifier re-labelled as non-categorical should never be
+// charted as a normal category (they are covered by their own findings).
+const NON_CATEGORICAL_KINDS = new Set([
+  "date_like",
+  "mixed",
+  "identifier",
+  "constant",
+  "empty",
+]);
+
 export function ReportCharts({ summary }: { summary: Summary }) {
+  const classification = summary.column_classification ?? {};
   const missingFlagged = Object.values(summary.missing_pct).some((p) => p > 20);
   const corrFlagged = Object.entries(summary.correlations).some(([a, targets]) =>
     Object.entries(targets).some(
@@ -284,9 +295,11 @@ export function ReportCharts({ summary }: { summary: Summary }) {
     .slice(0, 3)
     .map(([col]) => col);
   const catColumns = Object.entries(summary.categorical_summary)
-    .filter(
-      ([, info]) => info.cardinality > 1 && info.top[0]?.share > 0.9
-    )
+    .filter(([col, info]) => {
+      const kind = classification[col]?.kind;
+      if (kind && NON_CATEGORICAL_KINDS.has(kind)) return false;
+      return info.cardinality > 1 && info.top[0]?.share > 0.9;
+    })
     .map(([col]) => col);
 
   const charts = [];

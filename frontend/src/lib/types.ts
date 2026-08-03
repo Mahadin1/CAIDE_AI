@@ -4,6 +4,7 @@ export type Plan = "free" | "pro";
 export interface Profile {
   id: string;
   email: string;
+  name: string | null;
   plan: Plan;
   reports_this_month: number;
   created_at: string;
@@ -33,9 +34,31 @@ export interface CategoricalSummary {
   top: { value: string; count: number; share: number }[];
 }
 
+export type ColumnKind =
+  | "numeric"
+  | "categorical"
+  | "date_like"
+  | "mixed"
+  | "constant"
+  | "identifier"
+  | "empty";
+
+export interface ColumnClassification {
+  kind: ColumnKind;
+  cardinality: number;
+  total: number;
+  top_value_share?: number;
+  date_parse_rate?: number;
+  numeric_share?: number;
+  unique_ratio?: number;
+}
+
 export interface Summary {
   shape: { rows: number; columns: number };
   dtypes: Record<string, string>;
+  column_classification: Record<string, ColumnClassification>;
+  duplicate_count: number;
+  duplicate_share: number;
   missing: Record<string, number>;
   missing_pct: Record<string, number>;
   numeric_stats: Record<string, Record<string, number | null>>;

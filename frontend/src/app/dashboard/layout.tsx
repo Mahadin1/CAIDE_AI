@@ -50,7 +50,7 @@ export default async function DashboardLayout({
               {profile?.plan === "pro" ? "Pro" : "Free"}
             </Badge>
             <span className="hidden text-sm text-muted md:block">
-              {profile?.email ?? user.email}
+              {profile?.name ?? profile?.email ?? user.email}
             </span>
             <SignOutButton />
           </div>

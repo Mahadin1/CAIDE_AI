@@ -6,6 +6,10 @@ const nextConfig = {
       { protocol: 'https', hostname: 'avatars.githubusercontent.com' },
     ],
   },
+  allowedDevOrigins: ['.monkeycode-ai.live'],
+  experimental: {
+    allowedHosts: ['.monkeycode-ai.live'],
+  },
 }
 
 module.exports = nextConfig
