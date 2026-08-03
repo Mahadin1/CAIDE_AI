@@ -26,8 +26,6 @@ class Settings:
         )
         # Monthly report limit for free tier users.
         self.free_monthly_limit: int = int(os.getenv("FREE_MONTHLY_LIMIT", "2"))
-        # Maximum accepted CSV size in bytes (10 MB).
-        self.max_upload_bytes: int = 10 * 1024 * 1024
 
     @property
     def is_configured(self) -> bool:

@@ -7,12 +7,10 @@ import { createClient } from "@/lib/supabase/client";
 import { cn, formatBytes } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 
-const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
-
 type Phase = "idle" | "uploading" | "analyzing";
 
 interface UploadError {
-  code: "limit" | "type" | "size" | "upload" | "analyze" | "auth";
+  code: "limit" | "type" | "upload" | "analyze" | "auth";
   message: string;
 }
 
@@ -30,13 +28,6 @@ export function UploadFlow() {
 
     if (!candidate.name.toLowerCase().endsWith(".csv")) {
       setError({ code: "type", message: "Only .csv files are supported." });
-      return;
-    }
-    if (candidate.size > MAX_BYTES) {
-      setError({
-        code: "size",
-        message: `That file is ${formatBytes(candidate.size)}. The limit is 10 MB.`,
-      });
       return;
     }
     setFile(candidate);
@@ -172,7 +163,7 @@ export function UploadFlow() {
           <>
             <UploadCloud className="h-10 w-10 text-[#00d4ff]" />
             <p className="mt-4 font-medium">Drop your CSV here, or click to browse</p>
-            <p className="mt-1 text-sm text-muted">.csv only · up to 10 MB</p>
+            <p className="mt-1 text-sm text-muted">.csv only · any size</p>
           </>
         )}
       </div>

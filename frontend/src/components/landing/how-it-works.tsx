@@ -2,7 +2,7 @@ const steps = [
   {
     n: "01",
     title: "Upload your CSV",
-    body: "Drag a file into the dropzone. We accept .csv up to 10 MB — no setup, no schema mapping.",
+    body: "Drag a file into the dropzone. We accept .csv of any size — no setup, no schema mapping.",
   },
   {
     n: "02",
