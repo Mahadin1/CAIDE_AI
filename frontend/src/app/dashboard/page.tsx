@@ -33,7 +33,7 @@ export default async function DashboardPage() {
         <div>
           <h1 className="text-3xl font-medium">Dashboard</h1>
           <p className="mt-1 text-muted">
-            Upload a CSV and get a plain-English analysis in seconds.
+            Upload a dataset and get a plain-English analysis in seconds.
           </p>
         </div>
         <Button asChild size="sm">
@@ -85,7 +85,7 @@ export default async function DashboardPage() {
           <div className="card-panel p-10 text-center">
             <p className="font-medium">No analyses yet</p>
             <p className="mt-1 text-sm text-muted">
-              Drop your first CSV above and the agent will build your first report.
+              Drop your first dataset above and the agent will build your first report.
             </p>
           </div>
         ) : (

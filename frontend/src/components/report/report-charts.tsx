@@ -1,4 +1,5 @@
 "use client";
+import { useState } from "react";
 import {
   Bar,
   BarChart,
@@ -16,6 +17,7 @@ import {
   ZAxis,
 } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { RowDrilldown } from "@/components/report/row-drilldown";
 import type {
   CategoricalAssociationEntry,
   GroupComparisonEntry,
@@ -23,9 +25,9 @@ import type {
   Summary,
   TimeTrendEntry,
 } from "@/lib/types";
-const ACCENT = "#00d4ff";
-const MUTED = "#3a4550";
-const GRID = "#232a33";
+const ACCENT = "#fafafa";
+const MUTED = "#3a3a3a";
+const GRID = "#1f1f1f";
 
 // Mirrors the thresholds of the same name in agent.py's select_findings /
 // pdf.py, so a chart only appears here when the narrative also considers
@@ -36,8 +38,8 @@ const CRAMERS_V_ASSOCIATION_THRESHOLD = 0.3;
 const TREND_CORR_THRESHOLD = 0.5;
 
 const TOOLTIP_STYLE = {
-  backgroundColor: "#151a21",
-  border: "1px solid #232a33",
+  backgroundColor: "#0a0a0a",
+  border: "1px solid #1f1f1f",
   borderRadius: 8,
 };
 
@@ -76,9 +78,9 @@ function MissingValuesChart({ summary }: { summary: Summary }) {
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="column" tick={{ fill: "#8A94A3", fontSize: 11 }} />
-            <YAxis unit="%" tick={{ fill: "#8A94A3", fontSize: 11 }} />
-            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <XAxis dataKey="column" tick={{ fill: "#888888", fontSize: 11 }} />
+            <YAxis unit="%" tick={{ fill: "#888888", fontSize: 11 }} />
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
             <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
               {data.map((d) => (
                 <Cell key={d.column} fill={d.pct > 20 ? ACCENT : MUTED} />
@@ -131,8 +133,8 @@ function CorrelationHeatmap({ summary }: { summary: Summary }) {
                         title={`${a} vs ${b}: ${r ?? "n/a"}`}
                         className="flex h-10 items-center justify-center rounded text-xs"
                         style={{
-                          backgroundColor: r == null ? "#151a21" : heatColor(r as number),
-                          color: r != null && Math.abs(r) > 0.5 ? "#0b0e11" : "#F5F7FA",
+                          backgroundColor: r == null ? "#0a0a0a" : heatColor(r as number),
+                          color: r != null && Math.abs(r) > 0.5 ? "#000000" : "#FAFAFA",
                         }}
                       >
                         {r != null ? Math.round(r * 100) / 100 : "—"}
@@ -177,12 +179,12 @@ function OutlierScatter({
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
-            <XAxis type="number" dataKey="i" name="index" tick={{ fill: "#8A94A3", fontSize: 10 }} />
+            <XAxis type="number" dataKey="i" name="index" tick={{ fill: "#888888", fontSize: 10 }} />
             <YAxis
               type="number"
               dataKey="value"
               name="value"
-              tick={{ fill: "#8A94A3", fontSize: 10 }}
+              tick={{ fill: "#888888", fontSize: 10 }}
             />
             <ZAxis range={[40, 40]} />
             <Tooltip contentStyle={TOOLTIP_STYLE} />
@@ -220,9 +222,11 @@ function OutlierScatter({
 function CategoricalChart({
   column,
   info,
+  onDrill,
 }: {
   column: string;
   info: Summary["categorical_summary"][string];
+  onDrill: (column: string, value: string, title: string) => void;
 }) {
   const data = info.top.map((t) => ({
     value: t.value,
@@ -234,7 +238,7 @@ function CategoricalChart({
         <CardTitle>Distribution of “{column}”</CardTitle>
         <CardDescription>
           {info.cardinality} distinct value{info.cardinality === 1 ? "" : "s"} — the top ones are
-          shown as a share of all rows.
+          shown as a share of all rows. Click a bar to inspect the rows behind it.
         </CardDescription>
       </CardHeader>
       <CardContent className="h-72">
@@ -245,15 +249,21 @@ function CategoricalChart({
             margin={{ top: 4, right: 16, left: 8, bottom: 0 }}
           >
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" unit="%" tick={{ fill: "#8A94A3", fontSize: 11 }} />
+            <XAxis type="number" unit="%" tick={{ fill: "#888888", fontSize: 11 }} />
             <YAxis
               type="category"
               dataKey="value"
               width={96}
-              tick={{ fill: "#8A94A3", fontSize: 11 }}
+              tick={{ fill: "#888888", fontSize: 11 }}
             />
-            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="share" fill={ACCENT} radius={[0, 3, 3, 0]}>
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar
+              dataKey="share"
+              fill={ACCENT}
+              radius={[0, 3, 3, 0]}
+              className="cursor-pointer"
+              onClick={(entry) => onDrill(column, String((entry as { value: unknown }).value), `Distribution of “${column}”`)}
+            >
               {data.map((d) => (
                 <Cell key={d.value} fill={d.share > 90 ? ACCENT : MUTED} />
               ))}
@@ -297,13 +307,13 @@ function HistogramChart({
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="range"
-              tick={{ fill: "#8A94A3", fontSize: 9 }}
+              tick={{ fill: "#888888", fontSize: 9 }}
               angle={-30}
               textAnchor="end"
               height={40}
             />
-            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} allowDecimals={false} />
-            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
             <Bar dataKey="count" fill={ACCENT} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
@@ -315,7 +325,13 @@ function HistogramChart({
 /* ------------------------------------------------------------------ */
 /* Group comparison — mean of a numeric column, broken down by category */
 /* ------------------------------------------------------------------ */
-function GroupComparisonChart({ entry }: { entry: GroupComparisonEntry }) {
+function GroupComparisonChart({
+  entry,
+  onDrill,
+}: {
+  entry: GroupComparisonEntry;
+  onDrill: (column: string, value: string, title: string) => void;
+}) {
   const data = entry.groups.map((g) => ({ group: g.group, mean: g.mean }));
   return (
     <Card>
@@ -324,17 +340,30 @@ function GroupComparisonChart({ entry }: { entry: GroupComparisonEntry }) {
           Average “{entry.numeric_column}” by “{entry.category_column}”
         </CardTitle>
         <CardDescription>
-          A bigger gap between bars means a stronger relationship between the two columns.
+          A bigger gap between bars means a stronger relationship between the
+          two columns. Click a bar to inspect the rows in that group.
         </CardDescription>
       </CardHeader>
       <CardContent className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="group" tick={{ fill: "#8A94A3", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} />
-            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="mean" fill={ACCENT} radius={[3, 3, 0, 0]} />
+            <XAxis dataKey="group" tick={{ fill: "#888888", fontSize: 11 }} />
+            <YAxis tick={{ fill: "#888888", fontSize: 11 }} />
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar
+              dataKey="mean"
+              fill={ACCENT}
+              radius={[3, 3, 0, 0]}
+              className="cursor-pointer"
+              onClick={(bar) =>
+                onDrill(
+                  entry.category_column,
+                  String((bar as { group: unknown }).group),
+                  `Average “${entry.numeric_column}” by “${entry.category_column}”`
+                )
+              }
+            />
           </BarChart>
         </ResponsiveContainer>
       </CardContent>
@@ -367,14 +396,14 @@ function CategoricalAssociationChart({ entries }: { entries: CategoricalAssociat
             margin={{ top: 4, right: 16, left: 8, bottom: 0 }}
           >
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" domain={[0, 100]} tick={{ fill: "#8A94A3", fontSize: 11 }} />
+            <XAxis type="number" domain={[0, 100]} tick={{ fill: "#888888", fontSize: 11 }} />
             <YAxis
               type="category"
               dataKey="pair"
               width={140}
-              tick={{ fill: "#8A94A3", fontSize: 11 }}
+              tick={{ fill: "#888888", fontSize: 11 }}
             />
-            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
             <Bar dataKey="v" fill={ACCENT} radius={[0, 3, 3, 0]}>
               {data.map((d) => (
                 <Cell key={d.pair} fill={d.v >= 70 ? ACCENT : MUTED} />
@@ -403,8 +432,8 @@ function TimeTrendChart({ column, trend }: { column: string; trend: TimeTrendEnt
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={trend.series} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="period" tick={{ fill: "#8A94A3", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} allowDecimals={false} />
+            <XAxis dataKey="period" tick={{ fill: "#888888", fontSize: 10 }} />
+            <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
             <Tooltip contentStyle={TOOLTIP_STYLE} />
             <Line
               type="monotone"
@@ -432,7 +461,12 @@ const NON_CATEGORICAL_KINDS = new Set([
   "constant",
   "empty",
 ]);
-export function ReportCharts({ summary }: { summary: Summary }) {
+export function ReportCharts({ summary, reportId }: { summary: Summary; reportId?: string }) {
+  const [drill, setDrill] = useState<{
+    column: string;
+    value: string;
+    title: string;
+  } | null>(null);
   const classification = summary.column_classification ?? {};
   const missingFlagged = Object.values(summary.missing_pct).some((p) => p > 20);
   const corrFlagged = Object.entries(summary.correlations).some(([a, targets]) =>
@@ -501,7 +535,12 @@ export function ReportCharts({ summary }: { summary: Summary }) {
   if (catColumns.length > 0)
     charts.push(
       ...catColumns.map((col) => (
-        <CategoricalChart key={`cat-${col}`} column={col} info={summary.categorical_summary[col]} />
+        <CategoricalChart
+          key={`cat-${col}`}
+          column={col}
+          info={summary.categorical_summary[col]}
+          onDrill={(c, v, t) => setDrill({ column: c, value: v, title: t })}
+        />
       ))
     );
   if (groupComparisons.length > 0)
@@ -510,6 +549,7 @@ export function ReportCharts({ summary }: { summary: Summary }) {
         <GroupComparisonChart
           key={`group-${entry.numeric_column}-${entry.category_column}`}
           entry={entry}
+          onDrill={(c, v, t) => setDrill({ column: c, value: v, title: t })}
         />
       ))
     );
@@ -524,23 +564,47 @@ export function ReportCharts({ summary }: { summary: Summary }) {
 
   if (charts.length === 0) {
     return (
-      <Card>
-        <CardHeader>
-          <CardTitle>No issues flagged</CardTitle>
-          <CardDescription>
-            Nothing crossed the flagging thresholds — no heavy missingness, strong
-            correlations, outliers, skew, notable group differences, category
-            associations, dominant categories, or time trends. Your data is in good
-            shape.
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex h-40 items-center justify-center rounded border border-dashed border-[#232a33]">
-            <p className="text-sm text-muted">Charts appear here when something is flagged</p>
-          </div>
-        </CardContent>
-      </Card>
+      <>
+        <Card>
+          <CardHeader>
+            <CardTitle>No issues flagged</CardTitle>
+            <CardDescription>
+              Nothing crossed the flagging thresholds — no heavy missingness, strong
+              correlations, outliers, skew, notable group differences, category
+              associations, dominant categories, or time trends. Your data is in good
+              shape.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex h-40 items-center justify-center rounded border border-dashed border-[#1f1f1f]">
+              <p className="text-sm text-muted">Charts appear here when something is flagged</p>
+            </div>
+          </CardContent>
+        </Card>
+        {drill && reportId && (
+          <RowDrilldown
+            reportId={reportId}
+            column={drill.column}
+            value={drill.value}
+            title={drill.title}
+            onClose={() => setDrill(null)}
+          />
+        )}
+      </>
     );
   }
-  return <div className="grid gap-6 lg:grid-cols-2">{charts}</div>;
+  return (
+    <>
+      <div className="grid gap-6 lg:grid-cols-2">{charts}</div>
+      {drill && reportId && (
+        <RowDrilldown
+          reportId={reportId}
+          column={drill.column}
+          value={drill.value}
+          title={drill.title}
+          onClose={() => setDrill(null)}
+        />
+      )}
+    </>
+  );
 }

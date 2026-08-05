@@ -1,13 +1,7 @@
 import type { Metadata } from "next";
-import { Space_Grotesk } from "next/font/google";
+import { GeistSans } from "geist/font/sans";
+import { GeistMono } from "geist/font/mono";
 import "./globals.css";
-
-const spaceGrotesk = Space_Grotesk({
-  subsets: ["latin"],
-  weight: ["500", "700"],
-  variable: "--font-heading",
-  display: "swap",
-});
 
 export const metadata: Metadata = {
   title: {
@@ -22,22 +16,8 @@ export default function RootLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
   return (
-    <html lang="en" className={`${spaceGrotesk.variable}`}>
-      <head>
-        {/* General Sans (body font) from Fontshare — never Inter/Roboto/Open Sans */}
-        <link
-          rel="preconnect"
-          href="https://api.fontshare.com"
-          crossOrigin="anonymous"
-        />
-        <link
-          rel="stylesheet"
-          href="https://api.fontshare.com/v2/css?f[]=general-sans@400,500&display=swap"
-        />
-      </head>
-      <body
-        style={{ fontFamily: "'General Sans', var(--font-heading), sans-serif" }}
-      >
+    <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+      <body className="font-sans antialiased">
         {children}
       </body>
     </html>

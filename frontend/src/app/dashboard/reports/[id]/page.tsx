@@ -23,10 +23,10 @@ function formatDate(iso: string): string {
 }
 
 const severityStyles: Record<string, string> = {
-  high: "border-[#5b2a2a] bg-[#3a1a1a]/40",
-  medium: "border-[#5b4a1a] bg-[#3a3220]/40",
-  low: "border-[#232a33] bg-[#1b2230]",
-  info: "border-[#1a4a5b] bg-[#0f2a33]/40",
+  high: "border-[#3a1a1a] bg-[#1a0a0a]",
+  medium: "border-[#3a3320] bg-[#1a160c]",
+  low: "border-[#1f1f1f] bg-[#111111]",
+  info: "border-[#1f1f1f] bg-[#111111]",
 };
 
 export default async function ReportPage({
@@ -121,7 +121,7 @@ export default async function ReportPage({
 
       {/* Sample notice */}
       {sample && sample.mode === "sample" && (
-        <div className="rounded-md border border-[#3a3320] bg-[#2a2619]/40 p-4">
+        <div className="rounded-md border border-[#1f1f1f] bg-[#111111] p-4">
           <p className="text-sm text-foreground">
             Analyzed on a deterministic sample of{" "}
             {sample.sample_rows.toLocaleString()} of{" "}
@@ -175,7 +175,7 @@ export default async function ReportPage({
                   </div>
                   {f.detail && <p className="mt-1 text-xs text-muted">{f.detail}</p>}
                   {f.action && (
-                    <p className="mt-1 text-xs text-[#00d4ff]">Suggested: {f.action}</p>
+                    <p className="mt-1 text-xs text-[#fafafa]">Suggested: {f.action}</p>
                   )}
                 </div>
               ))}
@@ -202,7 +202,7 @@ export default async function ReportPage({
             return (
               <div
                 key={col}
-                className="flex items-center gap-2 rounded-md border border-[#232a33] bg-[#1b2230] px-3 py-1.5"
+                className="flex items-center gap-2 rounded-md border border-[#1f1f1f] bg-[#111111] px-3 py-1.5"
               >
                 <span className="text-sm text-foreground">{col}</span>
                 <span className="text-xs text-muted">{label}</span>
@@ -213,7 +213,7 @@ export default async function ReportPage({
       </Card>
 
       {/* Charts — only the ones relevant to what was flagged */}
-      <ReportCharts summary={summary} />
+      <ReportCharts summary={summary} reportId={id} />
     </div>
   );
 }

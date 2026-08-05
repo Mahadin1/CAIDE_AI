@@ -1,13 +1,13 @@
 const steps = [
   {
     n: "01",
-    title: "Upload your CSV",
-    body: "Drag a file into the dropzone. We accept .csv of any size — no setup, no schema mapping.",
+    title: "Upload your data",
+    body: "Drop in a CSV, Excel, JSON or Parquet file — any size. The agent profiles every column and proposes an analysis plan.",
   },
   {
     n: "02",
-    title: "The agent digs in",
-    body: "pandas computes the statistics: missing values, distributions, correlations and outliers, column by column.",
+    title: "Review the plan, or just go",
+    body: "Check the planned analyses, tweak column types, exclude noise or add questions. Start it and watch the progress.",
   },
   {
     n: "03",
@@ -18,7 +18,7 @@ const steps = [
 
 export function HowItWorks() {
   return (
-    <section id="how-it-works" className="section-padding border-t border-[#232a33]">
+    <section id="how-it-works" className="section-padding border-t border-[#1f1f1f]">
       <div className="container-page">
         <p className="text-sm font-medium uppercase tracking-widest text-muted">
           How it works

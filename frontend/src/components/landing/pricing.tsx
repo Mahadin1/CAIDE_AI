@@ -49,7 +49,7 @@ export function PricingSection() {
   }, [userId]);
 
   return (
-    <section id="pricing" className="section-padding border-t border-[#232a33]">
+    <section id="pricing" className="section-padding border-t border-[#1f1f1f]">
       <div className="container-page">
         <p className="text-sm font-medium uppercase tracking-widest text-muted">
           Pricing
@@ -68,7 +68,7 @@ export function PricingSection() {
             <ul className="mt-6 flex-1 space-y-3 text-sm">
               {freeFeatures.map((f) => (
                 <li key={f} className="flex items-start gap-2">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#00d4ff]" />
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#fafafa]" />
                   <span>{f}</span>
                 </li>
               ))}
@@ -79,7 +79,7 @@ export function PricingSection() {
           </div>
 
           {/* Pro — accent border, upgrade triggers Paddle checkout */}
-          <div className="flex flex-col rounded-lg border border-[#00d4ff] bg-[#151a21] p-6">
+          <div className="flex flex-col rounded-lg border border-[#fafafa] bg-[#0a0a0a] p-6">
             <h3 className="text-lg font-medium">Pro</h3>
             <p className="mt-1 text-sm text-muted">For teams and daily use</p>
             <p className="mt-6 font-heading text-4xl font-medium">
@@ -89,7 +89,7 @@ export function PricingSection() {
             <ul className="mt-6 flex-1 space-y-3 text-sm">
               {proFeatures.map((f) => (
                 <li key={f} className="flex items-start gap-2">
-                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#00d4ff]" />
+                  <Check className="mt-0.5 h-4 w-4 shrink-0 text-[#fafafa]" />
                   <span>{f}</span>
                 </li>
               ))}

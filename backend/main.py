@@ -15,6 +15,7 @@ polls. No request ever blocks on analysis compute.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import uuid as uuid_lib
 from contextlib import asynccontextmanager
@@ -180,7 +181,7 @@ async def analyze_plan(req: AnalyzePlanRequest) -> dict[str, Any]:
         )
     _check_quota(client, req.user_id)
 
-    content = _download_safe(client, req.storage_path)
+    content = _read_source(client, req.storage_path)
     if content is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -346,6 +347,30 @@ def _download_safe(client, storage_path: str) -> bytes | None:
     return content
 
 
+def _read_source(client, storage_path: str) -> bytes | None:
+    """Fetch a source file, handling both single-object uploads and
+    multi-part uploads (a folder of `part-NNNNNN` objects + a manifest.json).
+    """
+    manifest = _download_safe(client, f"{storage_path}/manifest.json")
+    if manifest is not None:
+        try:
+            meta = json.loads(manifest)
+        except (ValueError, TypeError):
+            return _download_safe(client, storage_path)
+        try:
+            part_count = int(meta.get("part_count", 0))
+        except (TypeError, ValueError):
+            part_count = 0
+        parts = [
+            _download_safe(client, f"{storage_path}/part-{i:06d}")
+            for i in range(part_count)
+        ]
+        if parts and all(p is not None for p in parts):
+            return b"".join(parts)
+        return None
+    return _download_safe(client, storage_path)
+
+
 @app.get("/reports/{report_id}/export/html")
 async def export_report_html(
     report_id: str, user_id: str = Query(...)
@@ -408,7 +433,7 @@ async def download_clean(
     row = _get_report_owned(client, report_id, user_id)
     upload = row["uploads"]
 
-    content = _download_safe(client, upload["storage_path"])
+    content = _read_source(client, upload["storage_path"])
     if content is None:
         raise HTTPException(status_code=404, detail="Source file not found")
 
@@ -451,7 +476,7 @@ async def report_subset(
     row = _get_report_owned(client, report_id, user_id)
     upload = row["uploads"]
 
-    content = _download_safe(client, upload["storage_path"])
+    content = _read_source(client, upload["storage_path"])
     if content is None:
         raise HTTPException(status_code=404, detail="Source file not found")
 

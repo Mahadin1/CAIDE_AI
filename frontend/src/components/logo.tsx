@@ -5,7 +5,7 @@ import { Button } from "@/components/ui/button";
 export function Logo() {
   return (
     <Link href="/" className="flex items-center gap-2">
-      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-[#0b0e11]">
+      <span className="flex h-7 w-7 items-center justify-center rounded-md bg-accent text-[#000000]">
         <svg
           viewBox="0 0 24 24"
           fill="none"

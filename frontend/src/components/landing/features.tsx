@@ -27,7 +27,7 @@ const features = [
 
 export function Features() {
   return (
-    <section className="section-padding border-t border-[#232a33]">
+    <section className="section-padding border-t border-[#1f1f1f]">
       <div className="container-page">
         <p className="text-sm font-medium uppercase tracking-widest text-muted">
           Features

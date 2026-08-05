@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { UploadCloud, FileText, X, Loader2 } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn, formatBytes } from "@/lib/utils";
+import { uploadLargeFile, DIRECT_UPLOAD_LIMIT } from "@/lib/tus";
 import { Button } from "@/components/ui/button";
 import { PlanPreview, type Overrides } from "@/components/dashboard/plan-preview";
 import type { JobStatus, PlanPreview as PlanPreviewData } from "@/lib/types";
@@ -62,6 +63,8 @@ export function UploadFlow() {
   const [error, setError] = useState<UploadError | null>(null);
   const [plan, setPlan] = useState<PlanPreviewData | null>(null);
   const [job, setJob] = useState<JobStatus | null>(null);
+  const [uploadProgress, setUploadProgress] = useState(0);
+  const [resumable, setResumable] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const stopPolling = useCallback(() => {
@@ -102,6 +105,8 @@ export function UploadFlow() {
     setPhase("idle");
     setPlan(null);
     setJob(null);
+    setUploadProgress(0);
+    setResumable(false);
     if (inputRef.current) inputRef.current.value = "";
   };
 
@@ -127,16 +132,30 @@ export function UploadFlow() {
     const uploadId = crypto.randomUUID();
     const safeName = file.name.replace(/[^\w.\-]+/g, "_");
     const storagePath = `uploads/${user.id}/${uploadId.slice(0, 8)}-${safeName}`;
+    const large = file.size > DIRECT_UPLOAD_LIMIT;
 
     try {
-      const { error: upErr } = await supabase.storage
-        .from("uploads")
-        .upload(storagePath, file, { upsert: false });
+      if (large) {
+        setResumable(true);
+        setUploadProgress(0);
+        await uploadLargeFile({
+          supabase,
+          bucket: "uploads",
+          path: storagePath,
+          file,
+          onProgress: ({ uploaded, total }) =>
+            setUploadProgress(Math.round((uploaded / total) * 100)),
+        });
+      } else {
+        const { error: upErr } = await supabase.storage
+          .from("uploads")
+          .upload(storagePath, file, { upsert: false });
 
-      if (upErr) {
-        setError({ code: "upload", message: upErr.message });
-        setPhase("idle");
-        return;
+        if (upErr) {
+          setError({ code: "upload", message: upErr.message });
+          setPhase("idle");
+          return;
+        }
       }
 
       setPhase("planning");
@@ -275,7 +294,7 @@ export function UploadFlow() {
             onDrop={handleDrop}
             className={cn(
               "card-panel flex cursor-pointer flex-col items-center justify-center px-6 py-12 text-center transition-colors",
-              dragOver && "border-[#00d4ff]"
+              dragOver && "border-[#fafafa]"
             )}
           >
             <input
@@ -286,25 +305,37 @@ export function UploadFlow() {
               onChange={(e) => pickFile(e.target.files?.[0])}
             />
             {phase === "uploading" ? (
-              <div className="flex flex-col items-center gap-2">
-                <Loader2 className="h-8 w-8 animate-spin text-[#00d4ff]" />
-                <p className="text-sm text-muted">Uploading to secure storage…</p>
+              <div className="flex w-full max-w-sm flex-col items-center gap-3">
+                <Loader2 className="h-8 w-8 animate-spin text-[#fafafa]" />
+                <p className="text-sm text-muted">
+                  {resumable
+                    ? "Uploading via resumable transfer — this will resume if interrupted…"
+                    : "Uploading to secure storage…"}
+                </p>
+                <div className="h-2 w-full overflow-hidden rounded-full bg-[#1f1f1f]">
+                  <div
+                    className="h-full rounded-full bg-[#fafafa] transition-all"
+                    style={{ width: `${uploadProgress || 3}%` }}
+                  />
+                </div>
+                <p className="text-xs text-muted">{uploadProgress || 0}%</p>
               </div>
             ) : phase === "planning" ? (
               <div className="flex flex-col items-center gap-2">
-                <Loader2 className="h-8 w-8 animate-spin text-[#00d4ff]" />
+                <Loader2 className="h-8 w-8 animate-spin text-[#fafafa]" />
                 <p className="text-sm text-muted">
                   Profiling columns and planning the analysis…
                 </p>
               </div>
             ) : (
               <>
-                <UploadCloud className="h-10 w-10 text-[#00d4ff]" />
+                <UploadCloud className="h-10 w-10 text-[#fafafa]" />
                 <p className="mt-4 font-medium">
                   Drop your data here, or click to browse
                 </p>
                 <p className="mt-1 text-sm text-muted">
-                  {ACCEPT_LABEL} · up to 50 MiB direct (larger files soon)
+                  {ACCEPT_LABEL} · files up to 50 MiB upload directly, larger files use
+                  resumable multi-part transfer
                 </p>
               </>
             )}
@@ -313,7 +344,7 @@ export function UploadFlow() {
           {file && phase === "idle" && (
             <div className="card-panel flex items-center justify-between gap-4 p-4">
               <div className="flex min-w-0 items-center gap-3">
-                <FileText className="h-5 w-5 shrink-0 text-[#00d4ff]" />
+                <FileText className="h-5 w-5 shrink-0 text-[#fafafa]" />
                 <div className="min-w-0">
                   <p className="truncate text-sm font-medium">{file.name}</p>
                   <p className="text-xs text-muted">{formatBytes(file.size)}</p>
@@ -336,14 +367,14 @@ export function UploadFlow() {
       {phase === "analyzing" && (
         <div className="card-panel p-6">
           <div className="flex items-center gap-2">
-            <Loader2 className="h-4 w-4 animate-spin text-[#00d4ff]" />
+            <Loader2 className="h-4 w-4 animate-spin text-[#fafafa]" />
             <p className="text-sm font-medium">
               {job?.stage_label ?? "Analyzing your data…"}
             </p>
           </div>
-          <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-[#232a33]">
+          <div className="mt-4 h-2 w-full overflow-hidden rounded-full bg-[#1f1f1f]">
             <div
-              className="h-full rounded-full bg-[#00d4ff] transition-all"
+              className="h-full rounded-full bg-[#fafafa] transition-all"
               style={{ width: `${job?.progress ?? 10}%` }}
             />
           </div>

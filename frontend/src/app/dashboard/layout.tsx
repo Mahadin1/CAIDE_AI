@@ -41,8 +41,8 @@ export default async function DashboardLayout({
     .single<Profile>();
 
   return (
-    <div className="min-h-screen bg-[#0b0e11]">
-      <header className="sticky top-0 z-40 border-b border-[#232a33] bg-[#0b0e11]/90 backdrop-blur">
+    <div className="min-h-screen bg-[#000000]">
+      <header className="sticky top-0 z-40 border-b border-[#1f1f1f] bg-[#000000]/90 backdrop-blur">
         <div className="container-page flex h-16 items-center justify-between">
           <Logo />
           <div className="flex items-center gap-4">

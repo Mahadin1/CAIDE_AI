@@ -17,8 +17,9 @@ const config: Config = {
         },
       },
       fontFamily: {
-        heading: ["var(--font-heading)", "sans-serif"],
-        sans: ["var(--font-body)", "sans-serif"],
+        heading: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
+        sans: ["var(--font-geist-sans)", "system-ui", "sans-serif"],
+        mono: ["var(--font-geist-mono)", "ui-monospace", "SFMono-Regular", "monospace"],
       },
       borderRadius: {
         lg: "var(--radius)",
