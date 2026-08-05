@@ -2,9 +2,9 @@ import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
 /**
- * Proxies the /analyze call to the backend so the browser never needs to
- * reach the backend's Railway-internal URL, and the user identity comes
- * from the session cookie (never from client-supplied user_id).
+ * Proxies the synchronous /analyze/plan preview to the backend. Identity
+ * comes from the session cookie (never from client-supplied user_id), and
+ * the storage_path must live under the caller's own folder.
  */
 export async function POST(request: Request) {
   const supabase = await createClient();
@@ -37,23 +37,23 @@ export async function POST(request: Request) {
   }
 
   const { upload_id, storage_path, filename, overrides } = body;
-  if (!upload_id) {
+  if (!upload_id || !storage_path) {
     return NextResponse.json(
-      { detail: "upload_id is required" },
+      { detail: "upload_id and storage_path are required" },
       { status: 422 }
     );
   }
 
-  // Ownership guard (when a path is supplied): it must live under this
-  // user's folder. The backend /analyze itself needs only the upload row.
-  if (storage_path && !storage_path.startsWith(`uploads/${user.id}/`)) {
+  // Ownership guard: the storage path must live under this user's folder.
+  const prefix = `uploads/${user.id}/`;
+  if (!storage_path.startsWith(prefix)) {
     return NextResponse.json(
       { detail: "storage_path does not belong to this user" },
       { status: 403 }
     );
   }
 
-  const upstream = await fetch(`${backendUrl}/analyze`, {
+  const upstream = await fetch(`${backendUrl}/analyze/plan`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -67,8 +67,5 @@ export async function POST(request: Request) {
   });
 
   const data = await upstream.json().catch(() => ({}));
-
-  // Surface the backend's 402 upgrade message verbatim so the UI can show
-  // it inline rather than as a raw error.
   return NextResponse.json(data, { status: upstream.status });
 }

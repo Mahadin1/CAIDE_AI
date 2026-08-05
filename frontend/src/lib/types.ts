@@ -8,6 +8,17 @@ export interface Profile {
   reports_this_month: number;
   created_at: string;
 }
+export interface SampleInfo {
+  mode: "full" | "sample" | "truncated";
+  total_rows: number;
+  sample_rows: number;
+  sampled_fraction: number;
+  confidence_level: number;
+  sampling_method: string;
+  seed: number;
+  margin_of_error: number;
+  interpretation: string;
+}
 export interface Upload {
   id: string;
   user_id: string;
@@ -15,6 +26,15 @@ export interface Upload {
   storage_path: string;
   status: UploadStatus;
   created_at: string;
+  stage?: string | null;
+  stage_label?: string | null;
+  progress?: number | null;
+  error_message?: string | null;
+  source_format?: string | null;
+  detected_encoding?: string | null;
+  analysis_mode?: "full" | "sample" | "truncated" | null;
+  row_estimate?: number | null;
+  column_count?: number | null;
   reports?: Report[];
 }
 export interface OutlierInfo {
@@ -36,6 +56,8 @@ export type ColumnKind =
   | "mixed"
   | "constant"
   | "identifier"
+  | "free_text"
+  | "boolean"
   | "empty";
 
 export interface ColumnClassification {
@@ -128,6 +150,17 @@ export interface Summary {
   categorical_associations?: Record<string, CategoricalAssociationEntry>;
   time_trends?: Record<string, TimeTrendEntry>;
   chart_specs?: ChartSpec[];
+  executed_tasks?: { type: string; description?: string }[];
+  skipped_tasks?: { type: string; reason: string }[];
+  adaptive?: Record<string, unknown>;
+  findings?: ReportFinding[];
+}
+export interface ReportFinding {
+  type: string;
+  severity: "info" | "low" | "medium" | "high";
+  message: string;
+  detail?: string;
+  action?: string;
 }
 export interface Report {
   id: string;
@@ -135,6 +168,48 @@ export interface Report {
   summary_json: Summary;
   narrative: string;
   created_at: string;
+  analysis_mode?: "full" | "sample" | "truncated" | null;
+  source_format?: string | null;
+  analysis_plan_json?: { tasks?: PlanTask[]; source?: string } | null;
+  overrides_json?: Record<string, unknown> | null;
+  sample_info_json?: SampleInfo | null;
+  export_html_url?: string | null;
+  export_pdf_url?: string | null;
+  cleaned_data_url?: string | null;
+}
+export interface PlanTask {
+  id: string;
+  type: string;
+  description: string;
+  rationale: string;
+  target_columns: string[];
+  enabled: boolean;
+}
+/** Response from POST /api/analyze/plan (plan-preview step). */
+export interface PlanPreview {
+  job_id: string;
+  fingerprint: Record<string, unknown>;
+  plan: { tasks: PlanTask[]; source: "llm" | "fallback" | "cache" };
+  column_types: Record<string, ColumnKind>;
+  overview: {
+    format: string;
+    encoding: string;
+    mode: "full" | "sample" | "truncated";
+    sample_info: SampleInfo;
+    shape: { rows: number; total_rows: number; columns: number };
+  };
+}
+/** Response from GET /api/jobs/:id (polling). */
+export interface JobStatus {
+  job_id: string;
+  status: UploadStatus;
+  stage: string | null;
+  stage_label: string | null;
+  progress: number;
+  error_message: string | null;
+  source_format: string | null;
+  analysis_mode: "full" | "sample" | "truncated" | null;
+  report_id: string | null;
 }
 export interface Subscription {
   user_id: string;

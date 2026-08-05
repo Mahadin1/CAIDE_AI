@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, Download, FileCode, FileSpreadsheet } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { ReportCharts } from "@/components/report/report-charts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,13 @@ function formatDate(iso: string): string {
   });
 }
 
+const severityStyles: Record<string, string> = {
+  high: "border-[#5b2a2a] bg-[#3a1a1a]/40",
+  medium: "border-[#5b4a1a] bg-[#3a3220]/40",
+  low: "border-[#232a33] bg-[#1b2230]",
+  info: "border-[#1a4a5b] bg-[#0f2a33]/40",
+};
+
 export default async function ReportPage({
   params,
 }: {
@@ -37,7 +44,9 @@ export default async function ReportPage({
 
   const { data: report } = await supabase
     .from("reports")
-    .select("id, upload_id, summary_json, narrative, created_at, uploads(id, filename, created_at)")
+    .select(
+      "id, upload_id, summary_json, narrative, created_at, analysis_mode, source_format, sample_info_json, uploads(id, filename, created_at)"
+    )
     .eq("id", id)
     .single<ReportWithUpload>();
 
@@ -50,6 +59,8 @@ export default async function ReportPage({
 
   const isPro = profile?.plan === "pro";
   const summary = report.summary_json;
+  const sample = report.sample_info_json;
+  const findings = summary.findings ?? [];
 
   return (
     <div className="space-y-8">
@@ -62,7 +73,21 @@ export default async function ReportPage({
         </Link>
         <div className="mt-4 flex flex-col justify-between gap-4 md:flex-row md:items-end">
           <div>
-            <h1 className="text-3xl font-medium">{report.uploads.filename}</h1>
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="text-3xl font-medium">{report.uploads.filename}</h1>
+              {report.source_format && (
+                <Badge variant="secondary">{report.source_format.toUpperCase()}</Badge>
+              )}
+              {report.analysis_mode && (
+                <Badge variant="secondary">
+                  {report.analysis_mode === "full"
+                    ? "Full dataset"
+                    : report.analysis_mode === "sample"
+                      ? "Sampled"
+                      : "Truncated"}
+                </Badge>
+              )}
+            </div>
             <p className="mt-1 text-sm text-muted">
               Analyzed {formatDate(report.created_at)} ·{" "}
               {summary.shape.rows.toLocaleString()} rows ×{" "}
@@ -73,18 +98,45 @@ export default async function ReportPage({
             </p>
           </div>
           {isPro && (
-            <form
-              action={`/api/reports/${report.id}/pdf`}
-              method="get"
-              target="_blank"
-            >
-              <Button type="submit" variant="outline" size="sm">
-                <Download className="h-4 w-4" /> Download PDF
-              </Button>
-            </form>
+            <div className="flex flex-wrap items-center gap-2">
+              <form action={`/api/reports/${report.id}/pdf`} method="get" target="_blank">
+                <Button type="submit" variant="outline" size="sm">
+                  <Download className="h-4 w-4" /> PDF
+                </Button>
+              </form>
+              <form action={`/api/reports/${report.id}/html`} method="get" target="_blank">
+                <Button type="submit" variant="outline" size="sm">
+                  <FileCode className="h-4 w-4" /> HTML
+                </Button>
+              </form>
+              <form action={`/api/reports/${report.id}/clean`} method="get" target="_blank">
+                <Button type="submit" variant="outline" size="sm">
+                  <FileSpreadsheet className="h-4 w-4" /> Cleaned CSV
+                </Button>
+              </form>
+            </div>
           )}
         </div>
       </div>
+
+      {/* Sample notice */}
+      {sample && sample.mode === "sample" && (
+        <div className="rounded-md border border-[#3a3320] bg-[#2a2619]/40 p-4">
+          <p className="text-sm text-foreground">
+            Analyzed on a deterministic sample of{" "}
+            {sample.sample_rows.toLocaleString()} of{" "}
+            {sample.total_rows.toLocaleString()} rows
+            {typeof sample.margin_of_error === "number" && (
+              <> — worst-case margin of error ±{(sample.margin_of_error * 100).toFixed(1)} pp</>
+            )}{" "}
+            at {Math.round((sample.confidence_level ?? 0.95) * 100)}% confidence.
+          </p>
+          <p className="mt-1 text-xs text-muted">
+            Exact global stats were computed over every row; deep analyses use
+            the sample.
+          </p>
+        </div>
+      )}
 
       {/* Narrative */}
       <Card>
@@ -100,6 +152,37 @@ export default async function ReportPage({
           </div>
         </CardContent>
       </Card>
+
+      {/* Findings */}
+      {findings.length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Findings</CardTitle>
+            <CardDescription>
+              {findings.length} evidence-backed issues worth knowing about
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="space-y-2">
+              {findings.map((f, i) => (
+                <div
+                  key={i}
+                  className={`rounded-md border p-3 ${severityStyles[f.severity] ?? severityStyles.info}`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium text-foreground">{f.message}</p>
+                    <Badge variant="secondary">{f.severity}</Badge>
+                  </div>
+                  {f.detail && <p className="mt-1 text-xs text-muted">{f.detail}</p>}
+                  {f.action && (
+                    <p className="mt-1 text-xs text-[#00d4ff]">Suggested: {f.action}</p>
+                  )}
+                </div>
+              ))}
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Overview */}
       <Card>

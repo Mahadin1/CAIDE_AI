@@ -312,7 +312,8 @@ def _execute_task(
         if ttype in ("missing_pattern",):
             return handler(summary, df, task)
         if ttype in ("trend_mannkendall", "duplicate_ids", "date_as_text",
-                     "mixed_type_cleanup", "text_top_words"):
+                     "mixed_type_cleanup", "text_top_words",
+                     "cardinality_sanity"):
             return handler(df, classification, task)
         if ttype in ("time_features", "seasonality"):
             return handler(df, classification, task)

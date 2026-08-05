@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { FileText, ArrowRight } from "lucide-react";
+import { FileText, ArrowRight, Loader2 } from "lucide-react";
 import { cn, timeAgo } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import type { Upload } from "@/lib/types";
@@ -17,6 +17,7 @@ const statusMeta: Record<
 export function UploadRow({ upload }: { upload: Upload }) {
   const meta = statusMeta[upload.status] ?? statusMeta.pending;
   const report = upload.reports?.[0];
+  const busy = upload.status === "processing" || upload.status === "pending";
 
   return (
     <div
@@ -26,14 +27,43 @@ export function UploadRow({ upload }: { upload: Upload }) {
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
-        <FileText className="h-5 w-5 shrink-0 text-muted" />
+        {busy ? (
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#00d4ff]" />
+        ) : (
+          <FileText className="h-5 w-5 shrink-0 text-muted" />
+        )}
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{upload.filename}</p>
           <p className="text-xs text-muted">{timeAgo(upload.created_at)}</p>
+          {busy && upload.stage_label && (
+            <p className="mt-0.5 text-xs text-[#00d4ff]">
+              {upload.stage_label}
+              {typeof upload.progress === "number" && ` · ${upload.progress}%`}
+            </p>
+          )}
+          {upload.status === "failed" && upload.error_message && (
+            <p className="mt-0.5 text-xs text-[#f87171]">
+              {upload.error_message}
+            </p>
+          )}
         </div>
       </div>
 
-      <div className="flex shrink-0 items-center gap-3">
+      <div className="flex shrink-0 items-center gap-2">
+        {upload.source_format && upload.status === "done" && (
+          <Badge variant="secondary">
+            {upload.source_format.toUpperCase()}
+          </Badge>
+        )}
+        {upload.analysis_mode && upload.status === "done" && (
+          <Badge variant="secondary">
+            {upload.analysis_mode === "full"
+              ? "Full"
+              : upload.analysis_mode === "sample"
+                ? "Sample"
+                : "Truncated"}
+          </Badge>
+        )}
         <Badge variant={meta.variant}>{meta.label}</Badge>
         {upload.status === "done" && report?.id && (
           <Link
