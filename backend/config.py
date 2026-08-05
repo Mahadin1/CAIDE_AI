@@ -1,5 +1,13 @@
 """Application configuration loaded from environment variables."""
 import os
+from pathlib import Path
+
+try:
+    from dotenv import load_dotenv
+    # Allow both local-dev (.env next to this file) and deployment to work.
+    load_dotenv(Path(__file__).parent / ".env")
+except Exception:  # pragma: no cover - dotenv is optional at runtime
+    pass
 
 
 class Settings:
@@ -26,6 +34,18 @@ class Settings:
         )
         # Monthly report limit for free tier users.
         self.free_monthly_limit: int = int(os.getenv("FREE_MONTHLY_LIMIT", "2"))
+        # --- adaptive EDA platform knobs (see docs/ARCHITECTURE.md) ---
+        # Rows/columns at or below which the full file is analyzed exactly.
+        self.max_rows_full: int = int(os.getenv("MAX_ROWS_FULL", "1000000"))
+        self.max_columns: int = int(os.getenv("MAX_COLUMNS", "500"))
+        # Deterministic sample size used when the file is larger than max_rows_full.
+        self.sample_target_rows: int = int(os.getenv("SAMPLE_TARGET_ROWS", "200000"))
+        # Async worker tuning.
+        self.job_timeout_seconds: int = int(os.getenv("JOB_TIMEOUT_SECONDS", "900"))
+        self.job_max_attempts: int = int(os.getenv("JOB_MAX_ATTEMPTS", "3"))
+        self.job_stale_seconds: int = int(os.getenv("JOB_STALE_SECONDS", "1800"))
+        # Narrative length cap.
+        self.narrative_max_words: int = int(os.getenv("NARRATIVE_MAX_WORDS", "1200"))
 
     @property
     def is_configured(self) -> bool:

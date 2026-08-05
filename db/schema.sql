@@ -20,7 +20,8 @@ create table if not exists public.profiles (
 );
 
 -- ============================================================
--- uploads: one row per CSV a user submits
+-- uploads: one row per uploaded file a user submits.
+-- This row also serves as the async analysis *job record*.
 -- ============================================================
 create table if not exists public.uploads (
   id uuid primary key default gen_random_uuid(),
@@ -28,7 +29,23 @@ create table if not exists public.uploads (
   filename text not null,
   storage_path text not null,
   status text not null default 'pending' check (status in ('pending', 'processing', 'done', 'failed')),
-  created_at timestamptz not null default now()
+  -- job orchestration / progress
+  stage text not null default 'queued',
+  stage_label text,
+  progress int not null default 5,
+  attempts int not null default 0,
+  error_message text,
+  -- file / data metadata filled by the worker
+  file_size_bytes bigint,
+  source_format text,
+  detected_encoding text,
+  row_estimate bigint,
+  column_count int,
+  analysis_mode text check (analysis_mode in ('full', 'sample', 'truncated')),
+  analysis_plan_json jsonb,
+  overrides_json jsonb,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
 );
 
 -- ============================================================
@@ -39,6 +56,15 @@ create table if not exists public.reports (
   upload_id uuid references public.uploads(id) on delete cascade not null,
   summary_json jsonb not null,
   narrative text not null,
+  -- adaptive-planning / large-file provenance (mirrors uploads for convenience)
+  analysis_plan_json jsonb,
+  overrides_json jsonb,
+  sample_info_json jsonb,
+  analysis_mode text,
+  source_format text,
+  export_html_url text,
+  export_pdf_url text,
+  cleaned_data_url text,
   created_at timestamptz not null default now()
 );
 
@@ -198,6 +224,34 @@ begin
   set reports_this_month = 0;
 end;
 $$;
+
+-- ============================================================
+-- Idempotent upgrades for databases created before the adaptive
+-- platform redesign. Safe to run; no-ops when columns exist.
+-- ============================================================
+alter table public.uploads add column if not exists stage text not null default 'queued';
+alter table public.uploads add column if not exists stage_label text;
+alter table public.uploads add column if not exists progress int not null default 5;
+alter table public.uploads add column if not exists attempts int not null default 0;
+alter table public.uploads add column if not exists error_message text;
+alter table public.uploads add column if not exists file_size_bytes bigint;
+alter table public.uploads add column if not exists source_format text;
+alter table public.uploads add column if not exists detected_encoding text;
+alter table public.uploads add column if not exists row_estimate bigint;
+alter table public.uploads add column if not exists column_count int;
+alter table public.uploads add column if not exists analysis_mode text;
+alter table public.uploads add column if not exists analysis_plan_json jsonb;
+alter table public.uploads add column if not exists overrides_json jsonb;
+alter table public.uploads add column if not exists updated_at timestamptz not null default now();
+
+alter table public.reports add column if not exists analysis_plan_json jsonb;
+alter table public.reports add column if not exists overrides_json jsonb;
+alter table public.reports add column if not exists sample_info_json jsonb;
+alter table public.reports add column if not exists analysis_mode text;
+alter table public.reports add column if not exists source_format text;
+alter table public.reports add column if not exists export_html_url text;
+alter table public.reports add column if not exists export_pdf_url text;
+alter table public.reports add column if not exists cleaned_data_url text;
 
 -- ============================================================
 -- Storage buckets

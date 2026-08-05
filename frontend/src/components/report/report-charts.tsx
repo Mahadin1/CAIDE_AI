@@ -1,10 +1,11 @@
 "use client";
-
 import {
   Bar,
   BarChart,
   CartesianGrid,
   Cell,
+  Line,
+  LineChart,
   ReferenceArea,
   ResponsiveContainer,
   Scatter,
@@ -15,11 +16,37 @@ import {
   ZAxis,
 } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import type { Summary } from "@/lib/types";
-
+import type {
+  CategoricalAssociationEntry,
+  GroupComparisonEntry,
+  HistogramInfo,
+  Summary,
+  TimeTrendEntry,
+} from "@/lib/types";
 const ACCENT = "#00d4ff";
 const MUTED = "#3a4550";
 const GRID = "#232a33";
+
+// Mirrors the thresholds of the same name in agent.py's select_findings /
+// pdf.py, so a chart only appears here when the narrative also considers
+// it worth mentioning.
+const SKEW_THRESHOLD = 1.0;
+const GROUP_DIFFERENCE_MIN_EFFECT = 0.5;
+const CRAMERS_V_ASSOCIATION_THRESHOLD = 0.3;
+const TREND_CORR_THRESHOLD = 0.5;
+
+const TOOLTIP_STYLE = {
+  backgroundColor: "#151a21",
+  border: "1px solid #232a33",
+  borderRadius: 8,
+};
+
+function fmtNum(x: number): string {
+  const ax = Math.abs(x);
+  if (ax >= 1000) return Math.round(x).toLocaleString();
+  if (ax >= 1) return x.toFixed(1);
+  return x.toPrecision(3);
+}
 
 function heatColor(r: number): string {
   const a = Math.min(1, Math.abs(r));
@@ -29,17 +56,14 @@ function heatColor(r: number): string {
     .padStart(2, "0");
   return `${ACCENT}${hex}`;
 }
-
 /* ------------------------------------------------------------------ */
 /* Missing values bar chart                                            */
 /* ------------------------------------------------------------------ */
-
 function MissingValuesChart({ summary }: { summary: Summary }) {
   const data = Object.entries(summary.missing_pct)
     .map(([column, pct]) => ({ column, pct: Math.round(pct * 10) / 10 }))
     .filter((d) => d.pct > 0)
     .sort((a, b) => b.pct - a.pct);
-
   return (
     <Card>
       <CardHeader>
@@ -54,14 +78,7 @@ function MissingValuesChart({ summary }: { summary: Summary }) {
             <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
             <XAxis dataKey="column" tick={{ fill: "#8A94A3", fontSize: 11 }} />
             <YAxis unit="%" tick={{ fill: "#8A94A3", fontSize: 11 }} />
-            <Tooltip
-              cursor={{ fill: "rgba(0,212,255,0.06)" }}
-              contentStyle={{
-                backgroundColor: "#151a21",
-                border: "1px solid #232a33",
-                borderRadius: 8,
-              }}
-            />
+            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
             <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
               {data.map((d) => (
                 <Cell key={d.column} fill={d.pct > 20 ? ACCENT : MUTED} />
@@ -77,11 +94,9 @@ function MissingValuesChart({ summary }: { summary: Summary }) {
 /* ------------------------------------------------------------------ */
 /* Correlation heatmap (grid, |r| -> accent intensity)                 */
 /* ------------------------------------------------------------------ */
-
 function CorrelationHeatmap({ summary }: { summary: Summary }) {
   const corr = summary.correlations;
   const cols = Object.keys(corr);
-
   return (
     <Card>
       <CardHeader>
@@ -134,10 +149,10 @@ function CorrelationHeatmap({ summary }: { summary: Summary }) {
   );
 }
 
+
 /* ------------------------------------------------------------------ */
 /* Outlier scatter — sample outlier values vs the IQR band             */
 /* ------------------------------------------------------------------ */
-
 function OutlierScatter({
   column,
   info,
@@ -149,7 +164,6 @@ function OutlierScatter({
   const points = sample.map((v, i) => ({ i, value: v }));
   const low = info.low_bound;
   const high = info.high_bound;
-
   return (
     <Card>
       <CardHeader>
@@ -171,13 +185,7 @@ function OutlierScatter({
               tick={{ fill: "#8A94A3", fontSize: 10 }}
             />
             <ZAxis range={[40, 40]} />
-            <Tooltip
-              contentStyle={{
-                backgroundColor: "#151a21",
-                border: "1px solid #232a33",
-                borderRadius: 8,
-              }}
-            />
+            <Tooltip contentStyle={TOOLTIP_STYLE} />
             {low != null && high != null && (
               <ReferenceArea
                 y1={low}
@@ -206,11 +214,9 @@ function OutlierScatter({
     </Card>
   );
 }
-
 /* ------------------------------------------------------------------ */
 /* Categorical distribution bar chart                                  */
 /* ------------------------------------------------------------------ */
-
 function CategoricalChart({
   column,
   info,
@@ -222,7 +228,6 @@ function CategoricalChart({
     value: t.value,
     share: Math.round(t.share * 1000) / 10,
   }));
-
   return (
     <Card>
       <CardHeader>
@@ -247,14 +252,7 @@ function CategoricalChart({
               width={96}
               tick={{ fill: "#8A94A3", fontSize: 11 }}
             />
-            <Tooltip
-              cursor={{ fill: "rgba(0,212,255,0.06)" }}
-              contentStyle={{
-                backgroundColor: "#151a21",
-                border: "1px solid #232a33",
-                borderRadius: 8,
-              }}
-            />
+            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
             <Bar dataKey="share" fill={ACCENT} radius={[0, 3, 3, 0]}>
               {data.map((d) => (
                 <Cell key={d.value} fill={d.share > 90 ? ACCENT : MUTED} />
@@ -268,9 +266,163 @@ function CategoricalChart({
 }
 
 /* ------------------------------------------------------------------ */
+/* Histogram — distribution of a (usually skewed) numeric column       */
+/* ------------------------------------------------------------------ */
+function HistogramChart({
+  column,
+  hist,
+  skew,
+}: {
+  column: string;
+  hist: HistogramInfo;
+  skew: number | null;
+}) {
+  const data = hist.counts.map((count, i) => ({
+    range: `${fmtNum(hist.bin_edges[i])}–${fmtNum(hist.bin_edges[i + 1])}`,
+    count,
+  }));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Distribution of “{column}”</CardTitle>
+        <CardDescription>
+          {skew != null
+            ? `Skew = ${skew.toFixed(2)} — the mean can be misleading here; the median is a safer summary.`
+            : "Bar height shows how many rows fall into each value range."}
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 24 }}>
+            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+            <XAxis
+              dataKey="range"
+              tick={{ fill: "#8A94A3", fontSize: 9 }}
+              angle={-30}
+              textAnchor="end"
+              height={40}
+            />
+            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} allowDecimals={false} />
+            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar dataKey="count" fill={ACCENT} radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Group comparison — mean of a numeric column, broken down by category */
+/* ------------------------------------------------------------------ */
+function GroupComparisonChart({ entry }: { entry: GroupComparisonEntry }) {
+  const data = entry.groups.map((g) => ({ group: g.group, mean: g.mean }));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>
+          Average “{entry.numeric_column}” by “{entry.category_column}”
+        </CardTitle>
+        <CardDescription>
+          A bigger gap between bars means a stronger relationship between the two columns.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="group" tick={{ fill: "#8A94A3", fontSize: 11 }} />
+            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} />
+            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar dataKey="mean" fill={ACCENT} radius={[3, 3, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Categorical associations — Cramér's V per notable pair              */
+/* ------------------------------------------------------------------ */
+function CategoricalAssociationChart({ entries }: { entries: CategoricalAssociationEntry[] }) {
+  const data = entries.map((e) => ({
+    pair: `${e.column_a} × ${e.column_b}`,
+    v: Math.round(e.cramers_v * 100),
+  }));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Categorical associations</CardTitle>
+        <CardDescription>
+          Cramér&apos;s V: how strongly two categorical columns move together, from 0
+          (unrelated) to 100 (perfectly related).
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={data}
+            layout="vertical"
+            margin={{ top: 4, right: 16, left: 8, bottom: 0 }}
+          >
+            <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" domain={[0, 100]} tick={{ fill: "#8A94A3", fontSize: 11 }} />
+            <YAxis
+              type="category"
+              dataKey="pair"
+              width={140}
+              tick={{ fill: "#8A94A3", fontSize: 11 }}
+            />
+            <Tooltip cursor={{ fill: "rgba(0,212,255,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar dataKey="v" fill={ACCENT} radius={[0, 3, 3, 0]}>
+              {data.map((d) => (
+                <Cell key={d.pair} fill={d.v >= 70 ? ACCENT : MUTED} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Time trend — row count per period for a date-like column            */
+/* ------------------------------------------------------------------ */
+function TimeTrendChart({ column, trend }: { column: string; trend: TimeTrendEntry }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>“{column}” over time</CardTitle>
+        <CardDescription>
+          Row count is {trend.direction} from {trend.start} to {trend.end}.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <LineChart data={trend.series} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
+            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="period" tick={{ fill: "#8A94A3", fontSize: 10 }} />
+            <YAxis tick={{ fill: "#8A94A3", fontSize: 11 }} allowDecimals={false} />
+            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <Line
+              type="monotone"
+              dataKey="count"
+              stroke={ACCENT}
+              strokeWidth={2}
+              dot={false}
+            />
+          </LineChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /* Auto-selection wrapper — only charts relevant to flagged findings   */
 /* ------------------------------------------------------------------ */
-
 // Columns the classifier re-labelled as non-categorical should never be
 // charted as a normal category (they are covered by their own findings).
 const NON_CATEGORICAL_KINDS = new Set([
@@ -280,7 +432,6 @@ const NON_CATEGORICAL_KINDS = new Set([
   "constant",
   "empty",
 ]);
-
 export function ReportCharts({ summary }: { summary: Summary }) {
   const classification = summary.column_classification ?? {};
   const missingFlagged = Object.values(summary.missing_pct).some((p) => p > 20);
@@ -302,6 +453,32 @@ export function ReportCharts({ summary }: { summary: Summary }) {
     })
     .map(([col]) => col);
 
+  // Heavily skewed numeric columns — same threshold agent.py uses to flag
+  // the "median is safer than the mean" finding.
+  const skewedColumns = Object.entries(summary.numeric_stats)
+    .map(([col, stats]) => [col, stats.skew] as const)
+    .filter((entry): entry is [string, number] => entry[1] != null && Math.abs(entry[1]) > SKEW_THRESHOLD)
+    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
+    .slice(0, 3);
+
+  // Notable numeric-by-category comparisons, strongest effect size first.
+  const groupComparisons = Object.values(summary.numeric_by_categorical ?? {})
+    .filter((c) => Math.abs(c.effect_size_std) >= GROUP_DIFFERENCE_MIN_EFFECT)
+    .sort((a, b) => Math.abs(b.effect_size_std) - Math.abs(a.effect_size_std))
+    .slice(0, 3);
+
+  // Notable categorical-vs-categorical associations, rendered as one chart.
+  const associations = Object.values(summary.categorical_associations ?? {})
+    .filter((a) => a.cramers_v >= CRAMERS_V_ASSOCIATION_THRESHOLD)
+    .sort((a, b) => b.cramers_v - a.cramers_v)
+    .slice(0, 5);
+
+  // Notable time trends, strongest correlation first.
+  const trends = Object.entries(summary.time_trends ?? {})
+    .filter(([, t]) => Math.abs(t.trend_correlation) >= TREND_CORR_THRESHOLD && t.series?.length)
+    .sort((a, b) => Math.abs(b[1].trend_correlation) - Math.abs(a[1].trend_correlation))
+    .slice(0, 3);
+
   const charts = [];
   if (missingFlagged) charts.push(<MissingValuesChart key="missing" summary={summary} />);
   if (corrFlagged) charts.push(<CorrelationHeatmap key="corr" summary={summary} />);
@@ -311,10 +488,37 @@ export function ReportCharts({ summary }: { summary: Summary }) {
         <OutlierScatter key={`outlier-${col}`} column={col} info={summary.outliers[col]} />
       ))
     );
+  if (skewedColumns.length > 0) {
+    const histograms = summary.histograms ?? {};
+    charts.push(
+      ...skewedColumns
+        .filter(([col]) => histograms[col])
+        .map(([col, skew]) => (
+          <HistogramChart key={`hist-${col}`} column={col} hist={histograms[col]} skew={skew} />
+        ))
+    );
+  }
   if (catColumns.length > 0)
     charts.push(
       ...catColumns.map((col) => (
         <CategoricalChart key={`cat-${col}`} column={col} info={summary.categorical_summary[col]} />
+      ))
+    );
+  if (groupComparisons.length > 0)
+    charts.push(
+      ...groupComparisons.map((entry) => (
+        <GroupComparisonChart
+          key={`group-${entry.numeric_column}-${entry.category_column}`}
+          entry={entry}
+        />
+      ))
+    );
+  if (associations.length > 0)
+    charts.push(<CategoricalAssociationChart key="associations" entries={associations} />);
+  if (trends.length > 0)
+    charts.push(
+      ...trends.map(([col, trend]) => (
+        <TimeTrendChart key={`trend-${col}`} column={col} trend={trend} />
       ))
     );
 
@@ -325,7 +529,9 @@ export function ReportCharts({ summary }: { summary: Summary }) {
           <CardTitle>No issues flagged</CardTitle>
           <CardDescription>
             Nothing crossed the flagging thresholds — no heavy missingness, strong
-            correlations, outliers, or dominant categories. Your data is in good shape.
+            correlations, outliers, skew, notable group differences, category
+            associations, dominant categories, or time trends. Your data is in good
+            shape.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -336,6 +542,5 @@ export function ReportCharts({ summary }: { summary: Summary }) {
       </Card>
     );
   }
-
   return <div className="grid gap-6 lg:grid-cols-2">{charts}</div>;
 }

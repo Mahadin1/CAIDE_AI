@@ -5,9 +5,12 @@ by user_id — never trust the caller to stay inside their own rows.
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
 from typing import Any
 
+import numpy as np
+import pandas as pd
 from supabase import Client, create_client
 
 from config import settings
@@ -62,7 +65,7 @@ def insert_upload(
     user_id: str,
     filename: str,
     storage_path: str,
-    status: str,
+    status: str = "pending",
 ) -> dict[str, Any]:
     res = (
         client.table("uploads")
@@ -73,6 +76,9 @@ def insert_upload(
                 "filename": filename,
                 "storage_path": storage_path,
                 "status": status,
+                "stage": "queued",
+                "progress": 5,
+                "attempts": 0,
             }
         )
         .execute()
@@ -82,6 +88,72 @@ def insert_upload(
 
 def set_upload_status(client: Client, upload_id: str, status: str) -> None:
     client.table("uploads").update({"status": status}).eq("id", upload_id).execute()
+
+
+def set_upload_stage(
+    client: Client,
+    upload_id: str,
+    stage: str,
+    label: str,
+    progress: int,
+) -> None:
+    client.table("uploads").update(
+        {
+            "stage": stage,
+            "stage_label": label,
+            "progress": progress,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", upload_id).execute()
+
+
+def set_upload_failed(client: Client, upload_id: str, message: str) -> None:
+    client.table("uploads").update(
+        {
+            "status": "failed",
+            "stage": "failed",
+            "stage_label": "Failed",
+            "progress": 100,
+            "error_message": message[:1000],
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", upload_id).execute()
+
+
+def set_upload_meta(client: Client, upload_id: str, **fields: Any) -> None:
+    """Patch arbitrary upload fields (format, plan, overrides, sizes, ...)."""
+    payload = dict(fields)
+    for key in ("analysis_plan_json", "overrides_json"):
+        if key in payload:
+            payload[key] = _jsonable(payload[key])
+    payload["updated_at"] = datetime.now(timezone.utc).isoformat()
+    client.table("uploads").update(payload).eq("id", upload_id).execute()
+
+
+def mark_upload_done(client: Client, upload_id: str) -> None:
+    client.table("uploads").update(
+        {
+            "status": "done",
+            "stage": "done",
+            "stage_label": "Done",
+            "progress": 100,
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }
+    ).eq("id", upload_id).execute()
+
+
+def get_stale_processing(client: Client, stale_seconds: int) -> list[dict[str, Any]]:
+    """Uploads stuck in 'processing' past the stale window (for recovery)."""
+    import time
+    cutoff = time.time() - stale_seconds
+    res = (
+        client.table("uploads")
+        .select("id")
+        .eq("status", "processing")
+        .lt("updated_at", datetime.fromtimestamp(cutoff, tz=timezone.utc).isoformat())
+        .execute()
+    )
+    return res.data
 
 
 def get_upload_with_user(client: Client, upload_id: str) -> dict[str, Any] | None:
@@ -100,21 +172,103 @@ def get_upload_with_user(client: Client, upload_id: str) -> dict[str, Any] | Non
 # reports
 # ---------------------------------------------------------------------------
 
+def _jsonable(value: Any) -> Any:
+    """Recursively convert numpy scalars/arrays to JSON-native types.
+
+    All dicts written to json/jsonb columns pass through here so the HTTP
+    layer never has to deal with numpy types in inserts.
+    """
+    if isinstance(value, dict):
+        return {str(k): _jsonable(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [_jsonable(v) for v in value]
+    if isinstance(value, np.bool_):
+        return bool(value)
+    if isinstance(value, np.integer):
+        return int(value)
+    if isinstance(value, np.floating):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return _jsonable(value.tolist())
+    if isinstance(value, pd.Timestamp):
+        return value.isoformat()
+    if value is pd.NaT or value is pd.NA:
+        return None
+    if isinstance(value, float) and math.isnan(value):
+        return None
+    return value
+
+
 def insert_report(
-    client: Client, upload_id: str, summary_json: dict, narrative: str
+    client: Client,
+    upload_id: str,
+    summary_json: dict,
+    narrative: str,
+    *,
+    analysis_plan_json: dict | None = None,
+    overrides_json: dict | None = None,
+    sample_info_json: dict | None = None,
+    analysis_mode: str | None = None,
+    source_format: str | None = None,
 ) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "upload_id": upload_id,
+        "summary_json": _jsonable(summary_json),
+        "narrative": narrative,
+    }
+    if analysis_plan_json is not None:
+        payload["analysis_plan_json"] = _jsonable(analysis_plan_json)
+    if overrides_json is not None:
+        payload["overrides_json"] = _jsonable(overrides_json)
+    if sample_info_json is not None:
+        payload["sample_info_json"] = _jsonable(sample_info_json)
+    if analysis_mode is not None:
+        payload["analysis_mode"] = analysis_mode
+    if source_format is not None:
+        payload["source_format"] = source_format
     res = (
         client.table("reports")
-        .insert(
-            {
-                "upload_id": upload_id,
-                "summary_json": summary_json,
-                "narrative": narrative,
-            }
-        )
+        .insert(payload)
         .execute()
     )
     return res.data[0]
+
+
+def get_report(client: Client, report_id: str) -> dict[str, Any] | None:
+    res = (
+        client.table("reports")
+        .select("*")
+        .eq("id", report_id)
+        .maybe_single()
+        .execute()
+    )
+    return res.data
+
+
+def get_report_with_upload(client: Client, report_id: str) -> dict[str, Any] | None:
+    res = (
+        client.table("reports")
+        .select("*, uploads!inner(*)")
+        .eq("id", report_id)
+        .maybe_single()
+        .execute()
+    )
+    return res.data
+
+
+def set_report_export_urls(
+    client: Client, report_id: str, *, export_html_url: str | None = None,
+    export_pdf_url: str | None = None, cleaned_data_url: str | None = None,
+) -> None:
+    payload: dict[str, Any] = {}
+    if export_html_url is not None:
+        payload["export_html_url"] = export_html_url
+    if export_pdf_url is not None:
+        payload["export_pdf_url"] = export_pdf_url
+    if cleaned_data_url is not None:
+        payload["cleaned_data_url"] = cleaned_data_url
+    if payload:
+        client.table("reports").update(payload).eq("id", report_id).execute()
 
 
 # ---------------------------------------------------------------------------

@@ -1,995 +1,218 @@
-"""The EDA agent.
+"""The DataScope EDA agent — public orchestration facade.
 
-Division of labour is strict and intentional:
+This module is the single entry point the HTTP layer and the worker use. It
+ties together the deterministic `eda` package modules and the two LLM steps:
 
-  * pandas computes every statistic deterministically (run_eda)
-  * rule-based code decides which statistics are worth narrating (select_findings)
-  * the LLM is called EXACTLY ONCE, only to turn those findings into
-    plain-English prose (narrate). It never sees the raw CSV and never
-    computes a number itself.
+    1. load + profile the file (loader, sampling, fingerprint)
+    2. plan  (planner: LLM fingerprint -> tasks, or deterministic fallback)
+    3. compute (executor: backbone + plan tasks, all deterministic)
+    4. findings (findings: rule-based, evidence + interpretation + action)
+    5. narrate (narrator: LLM, or deterministic fallback)
 
-This keeps the report accurate and the token bill tiny.
+Division of labour (see docs/ARCHITECTURE.md): pandas/scipy/statsmodels
+compute, rules decide, the LLM only plans and narrates. No number in any
+report is ever produced by the LLM.
 
-Beyond the original single-column stats (missing values, outliers,
-correlations, categorical dominance), this module now also computes:
-
-  * numeric-by-category comparisons (e.g. "revenue by region")
-  * categorical-vs-categorical association strength (Cramer's V)
-  * time trends for date-like columns
-  * a declarative `chart_specs` list describing every chart worth
-    drawing, so the chart layer can stay in sync with the stats without
-    re-deriving "what's interesting" itself.
-
-All of the above are ADDITIVE: every key that existed in run_eda()'s
-output before is still present, unchanged, in the same place. New data
-lives under new keys, so nothing that already consumes this module's
-output should need to change.
+Backwards compatibility: `run_eda(df)`, `classify_columns(df)` and
+`select_findings(summary)` remain available with their original signatures.
 """
 from __future__ import annotations
 
-import json
 import logging
-import math
-import warnings
-from itertools import combinations
+from dataclasses import dataclass, field
 from typing import Any
-
-import numpy as np
-import pandas as pd
-import httpx
 
 from config import settings
 
+from eda.classification import classify_columns
+from eda.fingerprint import build_fingerprint
+from eda.loader import LoadedData, cleanup_loaded, load_dataframe
+from eda.sampling import analysis_mode, sample_info, seed_for_path
+from eda.planner import build_plan
+from eda.executor import run_pipeline_on_frame
+from eda.findings import select_findings
+from eda.narrator import narrate
+from eda.stats_core import build_chart_specs, run_backbone
+
 logger = logging.getLogger("datascope.agent")
 
-# ---------------------------------------------------------------------------
-# Rule thresholds (deterministic — the narrative never computes these)
-# ---------------------------------------------------------------------------
 
-# A column whose single most-common value covers >= this share of rows is
-# treated as constant rather than as a meaningful categorical / numeric column.
-CONSTANT_TOP_SHARE = 0.99
-# A text column is reclassified as "date-like" when at least this share of its
-# non-null values parse as datetimes AND it is not essentially numeric.
-DATE_PARSE_MIN_SHARE = 0.8
-# Caps a "mixed" column: some-but-not-all values must be numeric, and numeric
-# values must stay under this share to still be considered mixed (all-numeric
-# text columns are handled by other rules instead of date detection).
-MIXED_NUMERIC_CAP = 0.95
-# A categorical column whose values are unique in more than this share of rows
-# is treated as an identifier (ID-like) column, not a chartable category.
-# The cardinality floor avoids false positives on tiny samples.
-IDENTIFIER_UNIQUE_RATIO = 0.9
-IDENTIFIER_MIN_CARDINALITY = 10
-# |skew| above this means the mean is likely misleading for that column.
-SKEW_THRESHOLD = 1.0
-
-# --- multi-column comparison thresholds -------------------------------------
-
-# A categorical column is only used to *group* a numeric column for
-# comparison when its cardinality is in this range — too few groups isn't
-# interesting, too many produces an unreadable comparison.
-GROUP_COMPARISON_MIN_CARDINALITY = 2
-GROUP_COMPARISON_MAX_CARDINALITY = 8
-# How many groups to show per numeric-by-category comparison (top by mean).
-MAX_GROUP_CATEGORIES_TO_LIST = 6
-# A group comparison is only "notable" if the gap between the highest and
-# lowest group mean is at least this many overall standard deviations.
-GROUP_DIFFERENCE_MIN_EFFECT = 0.5
-# How many group-difference findings to narrate at most.
-MAX_GROUP_DIFFERENCE_FINDINGS = 5
-
-# Cap on categorical-column pairs considered for association testing, so a
-# wide dataset can't blow up the number of crosstabs computed.
-CRAMERS_V_MAX_PAIRS = 15
-# Cramer's V >= this is reported as a meaningful association between two
-# categorical columns (0 = no association, 1 = perfect association).
-CRAMERS_V_ASSOCIATION_THRESHOLD = 0.3
-MAX_ASSOCIATION_FINDINGS = 5
-
-# A time trend needs at least this many periods (months) to be meaningful,
-# and a trend correlation at least this strong to be worth narrating.
-TREND_MIN_PERIODS = 4
-TREND_CORR_THRESHOLD = 0.5
-MAX_TREND_FINDINGS = 5
-# How many of the most recent periods to keep in a trend's charting series
-# (keeps summary_json bounded even for long daily/weekly date ranges).
-TREND_SERIES_MAX_POINTS = 36
-
-# Number of bins used when pre-computing a histogram for each numeric
-# column, so downstream renderers (e.g. the PDF exporter) can draw a
-# distribution chart without ever touching the DataFrame themselves.
-HISTOGRAM_BIN_COUNT = 10
-
-# Hard cap on how many chart specs are ever returned, so a very wide dataset
-# still produces a usable, front-end-friendly list.
-MAX_CHART_SPECS = 25
-
-# ---------------------------------------------------------------------------
-# JSON-safe conversion (numpy types are not JSON serialisable)
-# ---------------------------------------------------------------------------
-
-def _jsonable(value: Any) -> Any:
-    if isinstance(value, (np.integer,)):
-        return int(value)
-    if isinstance(value, (np.floating,)):
-        if math.isnan(float(value)):
-            return None
-        return float(value)
-    if isinstance(value, np.bool_):
-        return bool(value)
-    if isinstance(value, np.ndarray):
-        return [_jsonable(v) for v in value.tolist()]
-    if isinstance(value, pd.Timestamp):
-        return value.isoformat()
-    if isinstance(value, pd.Period):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    if isinstance(value, (float,)):
-        if math.isnan(value):
-            return None
-        return float(value)
-    if isinstance(value, str):
-        if value in ("nan", "NaT"):
-            return None
-        return value
-    return value
-
-
-def _finite_round(value: float | None, ndigits: int = 4) -> float | None:
-    """Round, but return None for NaN / inf so JSON serialisation never breaks."""
-    if value is None:
-        return None
-    try:
-        if math.isnan(value) or math.isinf(value):
-            return None
-    except TypeError:
-        return value
-    return round(float(value), ndigits)
+@dataclass
+class PreparedFile:
+    loaded: LoadedData
+    classification: dict[str, dict[str, Any]]
+    fingerprint: dict[str, Any]
+    mode: str
+    sample_info: dict[str, Any]
+    plan_tasks: list[dict[str, Any]] = field(default_factory=list)
+    plan_source: str = "fallback"
+    plan_cache_key: str = ""
 
 
 # ---------------------------------------------------------------------------
-# Statistics (deterministic, pandas-only)
+# Legacy-compatible pieces (kept for existing callers)
 # ---------------------------------------------------------------------------
 
-def detect_outliers(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    """IQR method per numeric column. Returns count, share, low/high bounds
-    and a bounded sample of the outlier values (for charting)."""
-    outliers: dict[str, dict[str, Any]] = {}
-    numeric = df.select_dtypes(include=[np.number])
-    for col in numeric.columns:
-        series = numeric[col].dropna()
-        if len(series) == 0:
-            continue
-        q1 = series.quantile(0.25)
-        q3 = series.quantile(0.75)
-        iqr = q3 - q1
-        if iqr == 0:
-            outliers[col] = {
-                "count": 0,
-                "share": 0.0,
-                "low_bound": None,
-                "high_bound": None,
-                "outlier_sample": [],
-            }
-            continue
-        low = q1 - 1.5 * iqr
-        high = q3 + 1.5 * iqr
-        mask = (series < low) | (series > high)
-        count = int(mask.sum())
-        sample = _jsonable(series[mask].head(50).tolist())
-        outliers[col] = {
-            "count": count,
-            "share": round(count / len(series), 4),
-            "low_bound": _finite_round(low),
-            "high_bound": _finite_round(high),
-            "outlier_sample": sample,
-        }
-    return outliers
-
-
-def summarize_categoricals(df: pd.DataFrame, top_n: int = 5) -> dict[str, Any]:
-    """Cardinality + top values for object/category columns."""
-    out: dict[str, Any] = {}
-    for col in df.select_dtypes(include=["object", "category"]).columns:
-        series = df[col].dropna()
-        if series.empty:
-            continue
-        counts = series.value_counts(dropna=False)
-        total = int(len(series))
-        top = []
-        for value, count in counts.head(top_n).items():
-            top.append(
-                {
-                    "value": str(value),
-                    "count": int(count),
-                    "share": round(float(count) / total, 4) if total else 0,
-                }
-            )
-        out[col] = {
-            "cardinality": int(series.nunique()),
-            "total": total,
-            "top": top,
-        }
-    return out
-
-
-def _numeric_parse_share(series: pd.Series) -> float:
-    """Fraction of non-null values that parse as numbers (text columns only)."""
-    cleaned = series.astype("string").str.strip().replace({"": None})
-    total = int(cleaned.notna().sum())
-    if total == 0:
-        return 0.0
-    converted = pd.to_numeric(cleaned, errors="coerce")
-    return float(converted.notna().sum()) / total
-
-
-def _date_parse_share(series: pd.Series) -> float:
-    """Fraction of non-null values that parse as datetimes."""
-    cleaned = series.astype("string").str.strip().replace({"": None})
-    total = int(cleaned.notna().sum())
-    if total == 0:
-        return 0.0
-    try:
-        with warnings.catch_warnings():
-            # pandas warns "Could not infer format" per unparseable column; the
-            # coerce fallback is intentional, so keep logs clean.
-            warnings.simplefilter("ignore", UserWarning)
-            parsed = pd.to_datetime(cleaned, errors="coerce")
-    except (TypeError, ValueError, OverflowError):
-        return 0.0
-    return float(parsed.notna().sum()) / total
-
-
-def classify_columns(df: pd.DataFrame) -> dict[str, dict[str, Any]]:
-    """Reclassify every column so findings and the chart selector treat
-    constant, date-like, mixed-type and identifier columns correctly instead
-    of as ordinary categoricals.
-
-    Order matters: constant first (an all-identical column could otherwise
-    look like anything), then date-like (before mixed), then mixed, then
-    identifier (high-cardinality categories), then plain categorical.
-    """
-    out: dict[str, dict[str, Any]] = {}
-    for col in df.columns:
-        series = df[col].dropna()
-        base: dict[str, Any] = {
-            "cardinality": int(series.nunique()),
-            "total": int(len(series)),
-        }
-        if series.empty:
-            out[col] = {"kind": "empty", **base}
-            continue
-
-        counts = series.value_counts(normalize=True)
-        top_value_share = float(counts.iloc[0]) if len(counts) else 0.0
-        base["top_value_share"] = round(top_value_share, 4)
-
-        # Phase 1: constant / near-constant columns (single value in 99%+ rows)
-        if top_value_share >= CONSTANT_TOP_SHARE:
-            out[col] = {"kind": "constant", **base}
-            continue
-
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            out[col] = {"kind": "date_like", "date_parse_rate": 1.0, **base}
-            continue
-
-        if pd.api.types.is_numeric_dtype(series):
-            out[col] = {"kind": "numeric", **base}
-            continue
-
-        numeric_share = _numeric_parse_share(series)
-        date_share = _date_parse_share(series)
-
-        # Phase 1: dates parsed as text — most values look like dates and the
-        # column is not essentially a number (avoids reclassifying e.g. years).
-        if date_share >= DATE_PARSE_MIN_SHARE and numeric_share < MIXED_NUMERIC_CAP:
-            out[col] = {
-                "kind": "date_like",
-                "date_parse_rate": round(date_share, 4),
-                **base,
-            }
-            continue
-
-        # Phase 1: mixed-type columns — some-but-not-all values are numeric.
-        if 0 < numeric_share < 1:
-            out[col] = {
-                "kind": "mixed",
-                "numeric_share": round(numeric_share, 4),
-                **base,
-            }
-            continue
-
-        # Phase 2: high-cardinality ID-like columns (unique in >90% of rows).
-        unique_ratio = (
-            base["cardinality"] / base["total"] if base["total"] else 0.0
-        )
-        if (
-            unique_ratio > IDENTIFIER_UNIQUE_RATIO
-            and base["cardinality"] >= IDENTIFIER_MIN_CARDINALITY
-        ):
-            out[col] = {
-                "kind": "identifier",
-                "unique_ratio": round(unique_ratio, 4),
-                **base,
-            }
-            continue
-
-        out[col] = {"kind": "categorical", **base}
-    return out
-
-
-def compute_histograms(
-    df: pd.DataFrame, classification: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """Pre-computed histogram (bin edges + counts) for every numeric column
-    that isn't constant. Downstream renderers (PDF export, frontend charts)
-    can draw a distribution chart straight from this — no re-computation,
-    no re-reading the CSV, and no risk of the chart disagreeing with the
-    stats in numeric_stats/outliers."""
-    results: dict[str, Any] = {}
-    for col, info in classification.items():
-        if info["kind"] != "numeric":
-            continue
-        series = df[col].dropna()
-        if series.empty or series.nunique() < 2:
-            continue
-        counts, edges = np.histogram(series.to_numpy(dtype=float), bins=HISTOGRAM_BIN_COUNT)
-        results[col] = {
-            "bin_edges": [_finite_round(float(e), 4) for e in edges],
-            "counts": [int(c) for c in counts],
-        }
-    return results
-
-
-# ---------------------------------------------------------------------------
-# Multi-column comparisons (Phase 3 — deterministic, pandas/numpy only)
-# ---------------------------------------------------------------------------
-
-def compare_numeric_by_category(
-    df: pd.DataFrame, classification: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """For every (numeric column, categorical column) pair with a sane
-    number of groups, compute per-group mean/median/count so the report can
-    say things like "revenue is notably higher in region X than region Y".
-
-    An "effect size" (gap between the top and bottom group mean, expressed
-    in overall standard deviations) is included so select_findings can
-    decide, without re-touching the DataFrame, whether the difference is
-    worth narrating.
-    """
-    results: dict[str, Any] = {}
-    numeric_cols = [c for c, info in classification.items() if info["kind"] == "numeric"]
-    cat_cols = [
-        c
-        for c, info in classification.items()
-        if info["kind"] == "categorical"
-        and GROUP_COMPARISON_MIN_CARDINALITY
-        <= info["cardinality"]
-        <= GROUP_COMPARISON_MAX_CARDINALITY
-    ]
-
-    for num_col in numeric_cols:
-        for cat_col in cat_cols:
-            sub = df[[num_col, cat_col]].dropna()
-            if sub.empty or sub[cat_col].nunique() < 2:
-                continue
-
-            overall_std = sub[num_col].std()
-            if overall_std is None or overall_std == 0 or math.isnan(overall_std):
-                continue
-
-            grouped = sub.groupby(cat_col)[num_col].agg(["mean", "median", "count"])
-            grouped = grouped.sort_values("mean", ascending=False)
-
-            group_records = []
-            for cat_value, row in grouped.head(MAX_GROUP_CATEGORIES_TO_LIST).iterrows():
-                group_records.append(
-                    {
-                        "group": str(cat_value),
-                        "mean": _finite_round(float(row["mean"])),
-                        "median": _finite_round(float(row["median"])),
-                        "count": int(row["count"]),
-                    }
-                )
-            if len(group_records) < 2:
-                continue
-
-            effect = (group_records[0]["mean"] - group_records[-1]["mean"]) / float(overall_std)
-            key = f"{num_col}__by__{cat_col}"
-            results[key] = {
-                "numeric_column": num_col,
-                "category_column": cat_col,
-                "groups": group_records,
-                "effect_size_std": _finite_round(float(effect), 3),
-            }
-    return results
-
-
-def _cramers_v(observed: np.ndarray) -> float | None:
-    """Cramer's V for a contingency table, computed by hand (no scipy
-    dependency): chi-square from observed vs. expected frequencies, then
-    normalised by sample size and table shape. Returns a value in [0, 1]
-    where 0 means no association and 1 means perfect association."""
-    n = observed.sum()
-    if n == 0:
-        return None
-    row_sums = observed.sum(axis=1, keepdims=True)
-    col_sums = observed.sum(axis=0, keepdims=True)
-    expected = row_sums @ col_sums / n
-    with np.errstate(divide="ignore", invalid="ignore"):
-        terms = np.where(expected > 0, (observed - expected) ** 2 / expected, 0.0)
-    chi2 = float(terms.sum())
-    r, k = observed.shape
-    denom = min(r - 1, k - 1)
-    if denom <= 0:
-        return None
-    phi2 = chi2 / float(n)
-    return math.sqrt(max(phi2, 0.0) / denom)
-
-
-def compute_categorical_associations(
-    df: pd.DataFrame, classification: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """Association strength (Cramer's V) between pairs of categorical
-    columns, e.g. "is payment_method related to region?". Identifiers,
-    constants and high-cardinality columns are excluded — those pairings
-    are noise, not insight."""
-    cat_cols = [
-        c for c, info in classification.items() if info["kind"] == "categorical" and info["cardinality"] >= 2
-    ]
-    results: dict[str, Any] = {}
-    if len(cat_cols) < 2:
-        return results
-
-    # Cap the number of pairs considered so wide datasets stay fast.
-    for col_a, col_b in list(combinations(cat_cols, 2))[:CRAMERS_V_MAX_PAIRS]:
-        sub = df[[col_a, col_b]].dropna()
-        if sub.empty:
-            continue
-        table = pd.crosstab(sub[col_a], sub[col_b])
-        if table.shape[0] < 2 or table.shape[1] < 2:
-            continue
-        v = _cramers_v(table.to_numpy(dtype=float))
-        if v is None:
-            continue
-        results[f"{col_a}__vs__{col_b}"] = {
-            "column_a": col_a,
-            "column_b": col_b,
-            "cramers_v": _finite_round(v, 3),
-        }
-    return results
-
-
-def compute_time_trends(
-    df: pd.DataFrame, classification: dict[str, dict[str, Any]]
-) -> dict[str, Any]:
-    """For every datetime / date-like column, resample row counts by month
-    and report the direction and strength of any trend. Only counts of
-    existing rows are used — nothing is forecast or estimated."""
-    results: dict[str, Any] = {}
-    for col, info in classification.items():
-        if info["kind"] != "date_like":
-            continue
-        if pd.api.types.is_datetime64_any_dtype(df[col]):
-            series = df[col].dropna()
-        else:
-            series = pd.to_datetime(df[col], errors="coerce").dropna()
-        if series.empty:
-            continue
-
-        counts = series.dt.to_period("M").value_counts().sort_index()
-        if len(counts) < TREND_MIN_PERIODS:
-            continue
-
-        y = counts.to_numpy(dtype=float)
-        if np.std(y) == 0:
-            continue
-        x = np.arange(len(counts), dtype=float)
-        corr = float(np.corrcoef(x, y)[0, 1])
-
-        # Bound the series so a long daily/weekly range doesn't bloat
-        # summary_json — keep only the most recent TREND_SERIES_MAX_POINTS.
-        tail = counts.tail(TREND_SERIES_MAX_POINTS)
-        series = [
-            {"period": str(period), "count": int(count)}
-            for period, count in tail.items()
-        ]
-
-        results[col] = {
-            "periods": int(len(counts)),
-            "start": str(counts.index[0]),
-            "end": str(counts.index[-1]),
-            "trend_correlation": _finite_round(corr, 3),
-            "direction": "increasing" if corr > 0 else "decreasing",
-            "series": series,
-        }
-    return results
-
-
-def build_chart_specs(summary: dict[str, Any]) -> list[dict[str, Any]]:
-    """Deterministic list of suggested chart specs for the front end to
-    render. This module never draws a plot itself — it only decides *what*
-    is worth plotting, so the chart layer stays declarative and always in
-    sync with the underlying stats instead of re-deriving "what's
-    interesting" on its own."""
-    specs: list[dict[str, Any]] = []
-    classification = summary.get("column_classification", {})
-    outliers = summary.get("outliers", {})
-
-    for col, info in classification.items():
-        kind = info["kind"]
-        if kind == "numeric":
-            specs.append(
-                {"type": "histogram", "columns": [col], "title": f"Distribution of {col}"}
-            )
-            if outliers.get(col, {}).get("count"):
-                specs.append(
-                    {"type": "boxplot", "columns": [col], "title": f"{col} — outlier spread"}
-                )
-        elif kind == "categorical":
-            specs.append(
-                {"type": "bar", "columns": [col], "title": f"Top values of {col}"}
-            )
-
-    for col in summary.get("time_trends", {}):
-        specs.append({"type": "line", "columns": [col], "title": f"{col} over time"})
-
-    correlations = summary.get("correlations") or {}
-    if correlations:
-        specs.append(
-            {
-                "type": "heatmap",
-                "columns": list(correlations.keys()),
-                "title": "Correlation heatmap",
-            }
-        )
-        pairs = []
-        for col_a, targets in correlations.items():
-            for col_b, r in targets.items():
-                if col_a < col_b and r is not None:
-                    pairs.append((abs(r), col_a, col_b))
-        pairs.sort(reverse=True)
-        for _, col_a, col_b in pairs[:3]:
-            specs.append(
-                {"type": "scatter", "columns": [col_a, col_b], "title": f"{col_a} vs {col_b}"}
-            )
-
-    for cmp in summary.get("numeric_by_categorical", {}).values():
-        specs.append(
-            {
-                "type": "grouped_bar",
-                "columns": [cmp["numeric_column"], cmp["category_column"]],
-                "title": f"{cmp['numeric_column']} by {cmp['category_column']}",
-            }
-        )
-
-    return specs[:MAX_CHART_SPECS]
-
-
-def run_eda(df: pd.DataFrame) -> dict[str, Any]:
-    """Compute the full statistical summary with pandas only."""
-    numeric = df.select_dtypes(include=[np.number])
-    describe: dict[str, Any] = {}
-    if not numeric.empty:
-        describe = _jsonable(numeric.describe().to_dict())
-        # Phase 2: skewness per numeric column (|skew| > 1 => mean may mislead).
-        for col, s in numeric.skew().items():
-            describe.setdefault(col, {})["skew"] = _finite_round(float(s))
-
-    corr = {}
-    if numeric.shape[1] > 1:
-        corr = _jsonable(numeric.corr().round(4).to_dict())
-
-    total_rows = int(len(df))
-    duplicate_count = int(df.duplicated().sum())
+def run_eda(df: Any) -> dict[str, Any]:
+    """Original signature: full deterministic summary for a DataFrame."""
     classification = classify_columns(df)
-
-    summary: dict[str, Any] = {
-        "shape": {"rows": total_rows, "columns": int(df.shape[1])},
-        "dtypes": df.dtypes.astype(str).to_dict(),
-        "column_classification": classification,
-        # Phase 1: exact duplicate rows.
-        "duplicate_count": duplicate_count,
-        "duplicate_share": (
-            round(duplicate_count / total_rows * 100, 2) if total_rows else 0.0
-        ),
-        "missing": {str(k): int(v) for k, v in df.isnull().sum().items()},
-        "missing_pct": {
-            str(k): round(float(v / total_rows) * 100, 2) if total_rows else 0
-            for k, v in df.isnull().sum().items()
-        },
-        "numeric_stats": describe,
-        "correlations": corr,
-        "outliers": detect_outliers(df),
-        "categorical_summary": summarize_categoricals(df),
-        # Chart-support stats: pre-computed so renderers never touch the df.
-        "histograms": compute_histograms(df, classification),
-        # Phase 3: multi-column comparisons.
-        "numeric_by_categorical": compare_numeric_by_category(df, classification),
-        "categorical_associations": compute_categorical_associations(df, classification),
-        "time_trends": compute_time_trends(df, classification),
-    }
-    # chart_specs is derived from everything above, so it's built last.
+    summary = run_backbone(df, classification)
     summary["chart_specs"] = build_chart_specs(summary)
     return summary
 
 
 # ---------------------------------------------------------------------------
-# Findings (deterministic rules — no LLM involved)
+# Pipeline stages
 # ---------------------------------------------------------------------------
 
-def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
-    """Rule-based selection of what the narrative should mention."""
-    findings: list[dict[str, Any]] = []
-
-    rows = summary["shape"]["rows"]
-    classification = summary.get("column_classification", {})
-    non_categorical_kinds = {"date_like", "mixed", "identifier", "constant", "empty"}
-
-    # 0. Duplicate rows (Phase 1)
-    dup_count = int(summary.get("duplicate_count", 0))
-    if dup_count:
-        dup_share = float(summary.get("duplicate_share") or 0)
-        findings.append(
-            {
-                "type": "duplicates",
-                "severity": "high" if dup_share > 5 else "medium",
-                "count": dup_count,
-                "share": round(dup_share, 1),
-                "message": (
-                    f"{dup_count} duplicate row{'s' if dup_count != 1 else ''} "
-                    f"detected ({dup_share:.1f}% of rows)."
-                ),
-            }
-        )
-
-    # 0b. Column classification findings (Phase 1 + Phase 2)
-    for col, info in classification.items():
-        kind = info["kind"]
-        if kind == "constant":
-            findings.append(
-                {
-                    "type": "constant",
-                    "severity": "medium",
-                    "column": col,
-                    "top_value_share": info["top_value_share"],
-                    "message": (
-                        f"'{col}' is constant (single value in "
-                        f"{info['top_value_share'] * 100:.0f}% of rows)."
-                    ),
-                }
-            )
-        elif kind == "date_like":
-            findings.append(
-                {
-                    "type": "date_text",
-                    "severity": "medium",
-                    "column": col,
-                    "date_parse_rate": info["date_parse_rate"],
-                    "message": (
-                        f"'{col}' looks like a date but is stored as text."
-                    ),
-                }
-            )
-        elif kind == "mixed":
-            findings.append(
-                {
-                    "type": "mixed_type",
-                    "severity": "medium",
-                    "column": col,
-                    "numeric_share": info["numeric_share"],
-                    "message": (
-                        f"'{col}' mixes numbers and text — likely a "
-                        "data entry issue."
-                    ),
-                }
-            )
-        elif kind == "identifier":
-            findings.append(
-                {
-                    "type": "identifier",
-                    "severity": "low",
-                    "column": col,
-                    "unique_ratio": info["unique_ratio"],
-                    "message": (
-                        f"'{col}' looks like an identifier "
-                        f"({info['unique_ratio'] * 100:.0f}% of values are "
-                        "unique) — it is excluded from the category charts."
-                    ),
-                }
-            )
-
-    # 1. High-missingness columns (>20%)
-    for col, pct in summary["missing_pct"].items():
-        if pct > 20:
-            findings.append(
-                {
-                    "type": "missing",
-                    "severity": "high" if pct > 50 else "medium",
-                    "column": col,
-                    "percent_missing": pct,
-                    "message": (
-                        f"'{col}' is missing {pct:.1f}% of its values."
-                    ),
-                }
-            )
-
-    # 2. Strong correlations (|r| > 0.7)
-    for col_a, targets in summary["correlations"].items():
-        for col_b, r in targets.items():
-            if col_a >= col_b:
-                continue  # keep each pair once
-            if r is not None and abs(r) > 0.7:
-                findings.append(
-                    {
-                        "type": "correlation",
-                        "severity": "high",
-                        "column_a": col_a,
-                        "column_b": col_b,
-                        "r": _finite_round(float(r), 3),
-                        "message": (
-                            f"'{col_a}' and '{col_b}' are strongly correlated "
-                            f"(r = {_finite_round(float(r), 3)})."
-                        ),
-                    }
-                )
-
-    # 3. Outliers (>1% of rows flagged in any column)
-    for col, info in summary["outliers"].items():
-        if info["count"] and info["share"] > 0.01:
-            findings.append(
-                {
-                    "type": "outliers",
-                    "severity": "high" if info["share"] > 0.05 else "medium",
-                    "column": col,
-                    "count": info["count"],
-                    "share": round(info["share"] * 100, 1),
-                    "message": (
-                        f"'{col}' has {info['count']} outliers "
-                        f"({info['share'] * 100:.1f}% of rows)."
-                    ),
-                }
-            )
-
-    # 3b. Heavily skewed numeric columns (Phase 2)
-    for col, stats in summary["numeric_stats"].items():
-        skew = stats.get("skew")
-        if skew is None:
-            continue
-        skew = float(skew)
-        if abs(skew) <= SKEW_THRESHOLD:
-            continue
-        findings.append(
-            {
-                "type": "skew",
-                "severity": "high" if abs(skew) > 2 else "medium",
-                "column": col,
-                "skew": _finite_round(skew, 3),
-                "message": (
-                    f"'{col}' is heavily skewed (skew = {_finite_round(skew, 3)}) "
-                    "— the mean may be misleading here; the median is a safer "
-                    "summary."
-                ),
-            }
-        )
-
-    # 4. Dominant categorical values (>90% of rows in one category), but only
-    #    for columns the classifier still treats as real categoricals.
-    for col, info in summary["categorical_summary"].items():
-        if classification.get(col, {}).get("kind") in non_categorical_kinds:
-            continue
-        if info["cardinality"] <= 1:
-            continue
-        if info["top"] and info["top"][0]["share"] > 0.9:
-            top = info["top"][0]
-            findings.append(
-                {
-                    "type": "categorical_dominance",
-                    "severity": "medium",
-                    "column": col,
-                    "dominant_value": top["value"],
-                    "share": round(top["share"] * 100, 1),
-                    "message": (
-                        f"'{col}' is dominated by '{top['value']}' "
-                        f"({top['share'] * 100:.1f}% of rows)."
-                    ),
-                }
-            )
-
-    # 5. Notable numeric-by-category differences (Phase 3), strongest first.
-    group_comparisons = list(summary.get("numeric_by_categorical", {}).items())
-    group_comparisons.sort(
-        key=lambda kv: abs(kv[1].get("effect_size_std") or 0), reverse=True
+def prepare(
+    data: bytes,
+    filename: str,
+    storage_path: str,
+) -> PreparedFile:
+    """Load + profile the file. Synchronous (CPU-bound)."""
+    loaded = load_dataframe(
+        data,
+        filename,
+        max_rows_full=settings.max_rows_full,
+        sample_target=settings.sample_target_rows,
+        seed=seed_for_path(storage_path),
+        max_cols=settings.max_columns,
     )
-    for _, cmp in group_comparisons[:MAX_GROUP_DIFFERENCE_FINDINGS]:
-        effect = cmp.get("effect_size_std") or 0
-        if abs(effect) < GROUP_DIFFERENCE_MIN_EFFECT:
-            continue
-        groups = cmp["groups"]
-        top_group, bottom_group = groups[0], groups[-1]
-        findings.append(
-            {
-                "type": "group_difference",
-                "severity": "high" if abs(effect) > 1 else "medium",
-                "numeric_column": cmp["numeric_column"],
-                "category_column": cmp["category_column"],
-                "top_group": top_group["group"],
-                "top_mean": top_group["mean"],
-                "bottom_group": bottom_group["group"],
-                "bottom_mean": bottom_group["mean"],
-                "effect_size_std": effect,
-                "message": (
-                    f"Average '{cmp['numeric_column']}' differs notably across "
-                    f"'{cmp['category_column']}': '{top_group['group']}' averages "
-                    f"{top_group['mean']}, versus {bottom_group['mean']} for "
-                    f"'{bottom_group['group']}'."
-                ),
-            }
-        )
-
-    # 6. Meaningful categorical-vs-categorical associations (Phase 3).
-    associations = list(summary.get("categorical_associations", {}).items())
-    associations.sort(key=lambda kv: kv[1].get("cramers_v") or 0, reverse=True)
-    for _, assoc in associations[:MAX_ASSOCIATION_FINDINGS]:
-        v = assoc.get("cramers_v") or 0
-        if v < CRAMERS_V_ASSOCIATION_THRESHOLD:
-            continue
-        findings.append(
-            {
-                "type": "categorical_association",
-                "severity": "high" if v > 0.5 else "medium",
-                "column_a": assoc["column_a"],
-                "column_b": assoc["column_b"],
-                "cramers_v": v,
-                "message": (
-                    f"'{assoc['column_a']}' and '{assoc['column_b']}' tend to "
-                    f"move together (association strength = {v})."
-                ),
-            }
-        )
-
-    # 7. Time trends (Phase 3).
-    trends = list(summary.get("time_trends", {}).items())
-    trends.sort(key=lambda kv: abs(kv[1].get("trend_correlation") or 0), reverse=True)
-    for col, trend in trends[:MAX_TREND_FINDINGS]:
-        corr = trend.get("trend_correlation") or 0
-        if abs(corr) < TREND_CORR_THRESHOLD:
-            continue
-        findings.append(
-            {
-                "type": "trend",
-                "severity": "medium",
-                "column": col,
-                "direction": trend["direction"],
-                "periods": trend["periods"],
-                "start": trend["start"],
-                "end": trend["end"],
-                "message": (
-                    f"Row counts by '{col}' show a {trend['direction']} trend "
-                    f"from {trend['start']} to {trend['end']}."
-                ),
-            }
-        )
-
-    # 8. Data-quality notice if the file was tiny or had no numeric columns
-    if rows == 0:
-        findings.append(
-            {
-                "type": "empty",
-                "severity": "high",
-                "message": "The file contains no rows.",
-            }
-        )
-    if not summary["correlations"] and not any(
-        k for k in summary["numeric_stats"]
-    ):
-        findings.append(
-            {
-                "type": "no_numeric",
-                "severity": "medium",
-                "message": (
-                    "No numeric columns were detected, so no correlations "
-                    "or outlier analysis is available."
-                ),
-            }
-        )
-
-    return findings
+    classification = classify_columns(loaded.df)
+    fingerprint = build_fingerprint(loaded.df, loaded, classification)
+    mode = analysis_mode(int(len(loaded.df)), loaded.total_rows,
+                         settings.max_rows_full)
+    s_info = sample_info(
+        mode,
+        loaded.total_rows,
+        int(len(loaded.df)),
+        storage_path,
+        truncated_cols=loaded.truncated_cols,
+    )
+    return PreparedFile(
+        loaded=loaded,
+        classification=classification,
+        fingerprint=fingerprint,
+        mode=mode,
+        sample_info=s_info,
+    )
 
 
-# ---------------------------------------------------------------------------
-# Narration (the single LLM call)
-# ---------------------------------------------------------------------------
-
-NARRATE_SYSTEM_PROMPT = (
-    "You are a senior data analyst writing an EDA report for a "
-    "non-technical stakeholder. You will receive a JSON list of findings "
-    "that were already computed by deterministic code (pandas statistics) "
-    "— they are not your estimates.\n\n"
-    "Hard rules:\n"
-    "- Only discuss numbers, columns and relationships that appear in the "
-    "findings JSON. Never invent, guess, or extrapolate a number, column "
-    "name, or relationship that is not given to you.\n"
-    "- Group related findings together into a real narrative instead of "
-    "one disconnected sentence per finding — e.g. discuss a correlation "
-    "alongside outliers in the same columns, or a group difference "
-    "alongside the associated skew, if both appear.\n"
-    "- For any comparison finding (group differences, categorical "
-    "associations, correlations, trends), state clearly what is being "
-    "compared and what it practically means for the reader — what it "
-    "should make them check, question, or decide.\n"
-    "- Explain why each finding matters, not just what the number is.\n"
-    "- You do not need to restate every exact number verbatim; a rounded, "
-    "natural-language reference is fine since exact figures are shown in "
-    "the accompanying charts.\n"
-    "- Plain prose only: no headers, no bullet lists, no markdown, no code "
-    "blocks. Organise the writing into a few well-structured paragraphs.\n"
-    "- Keep the whole response under 900 words."
-)
+async def plan_file(
+    prepared: PreparedFile,
+    overrides: dict[str, Any] | None = None,
+) -> PreparedFile:
+    """Generate (or fetch cached) the analysis plan for a prepared file."""
+    plan = await build_plan(prepared.fingerprint, overrides)
+    prepared.plan_tasks = plan["tasks"]
+    prepared.plan_source = plan["source"]
+    prepared.plan_cache_key = plan["cache_key"]
+    return prepared
 
 
-async def narrate(findings: list[dict[str, Any]]) -> str:
-    """ONE OpenRouter call: findings -> prose. Never reads the CSV."""
-    if not findings:
-        return (
-            "This dataset is in good shape: no columns are missing large "
-            "numbers of values, no numeric columns show extreme outliers or "
-            "strong correlations, no category dominates the others, and no "
-            "notable group differences, associations, or time trends were "
-            "detected. You can read the charts below for the full picture."
-        )
-
-    if not settings.openrouter_api_key:
-        # Graceful fallback so the pipeline still completes when the LLM is
-        # not configured (e.g. local dev). Narratives are still deterministic.
-        return _fallback_prose(findings)
-
-    payload = {
-        "model": settings.openrouter_model,
-        "messages": [
-            {"role": "system", "content": NARRATE_SYSTEM_PROMPT},
-            {
-                "role": "user",
-                "content": (
-                    "Findings as JSON (this is the complete set of facts you "
-                    "are allowed to use):\n"
-                    + json.dumps(findings, default=_jsonable)
-                ),
-            },
-        ],
-        "temperature": 0.2,
-        "max_tokens": 2000,
+def column_type_map(prepared: PreparedFile) -> dict[str, str]:
+    """Editable column-kind map for the plan-preview UI."""
+    return {
+        col: info["kind"]
+        for col, info in prepared.classification.items()
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=60) as client:
-            resp = await client.post(
-                "https://openrouter.ai/api/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {settings.openrouter_api_key}",
-                    "Content-Type": "application/json",
-                    "HTTP-Referer": "https://datascope.app",
-                    "X-Title": "DataScope",
-                },
-                json=payload,
-            )
-            resp.raise_for_status()
-            data = resp.json()
-            content = (data["choices"][0]["message"]["content"] or "").strip()
-            if content:
-                return content
-    except (httpx.HTTPError, KeyError, IndexError, ValueError):
-        logger.warning("OpenRouter narration failed; using deterministic prose")
 
-    # A narration outage must never fail a completed analysis — fall back to
-    # the deterministic finding sentences.
-    return _fallback_prose(findings)
+def build_overview(prepared: PreparedFile, summary: dict[str, Any]) -> dict[str, Any]:
+    """The overview block sent to the narrator alongside plan + findings."""
+    return {
+        "shape": summary["shape"],
+        "format": prepared.loaded.fmt,
+        "encoding": prepared.loaded.encoding,
+        "mode": prepared.mode,
+        "sample_info": prepared.sample_info,
+    }
 
 
-def _fallback_prose(findings: list[dict[str, Any]]) -> str:
-    lines = [f["message"] for f in findings]
-    return " ".join(lines)
+def execute(
+    prepared: PreparedFile,
+    storage_path: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Deterministic half of the pipeline (blocking — call via to_thread).
+
+    Returns summary + findings + provenance. The narrative is produced
+    separately by :func:`narrate_result` so the worker can keep the event
+    loop free during heavy pandas work and await the LLM separately.
+    """
+    summary = run_pipeline_on_frame(
+        prepared.loaded.df,
+        loaded=prepared.loaded,
+        plan_tasks=prepared.plan_tasks,
+        overrides=overrides,
+        storage_path=storage_path,
+    )
+    findings = select_findings(summary)
+    summary["findings"] = findings
+    return {
+        "summary": summary,
+        "findings": findings,
+        "plan_tasks": prepared.plan_tasks,
+        "plan_source": prepared.plan_source,
+        "plan_cache_key": prepared.plan_cache_key,
+        "mode": prepared.mode,
+        "sample_info": prepared.sample_info,
+        "format": prepared.loaded.fmt,
+        "encoding": prepared.loaded.encoding,
+    }
+
+
+async def narrate_result(prepared: PreparedFile, result: dict[str, Any]) -> str:
+    """Async LLM narration over an :func:`execute` result (with fallback)."""
+    overview = build_overview(prepared, result["summary"])
+    return await narrate(result["plan_tasks"], result["findings"], overview)
+
+
+async def execute_and_narrate(
+    prepared: PreparedFile,
+    storage_path: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convenience wrapper for small pipelines: execute + narrate."""
+    result = execute(prepared, storage_path, overrides)
+    result["narrative"] = await narrate_result(prepared, result)
+    return result
+
+
+async def prepare_plan_and_execute(
+    data: bytes,
+    filename: str,
+    storage_path: str,
+    overrides: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Convenience: prepare -> plan -> execute -> narrate in one call."""
+    prepared = prepare(data, filename, storage_path)
+    await plan_file(prepared, overrides)
+    return await execute_and_narrate(prepared, storage_path, overrides)
+
+
+def load_and_classify(
+    data: bytes, filename: str, storage_path: str
+) -> dict[str, Any]:
+    """Load a file and classify its columns. Returns a dict with the frame,
+    classification and the LoadedData (for cleanup)."""
+    loaded = load_dataframe(
+        data,
+        filename,
+        max_rows_full=settings.max_rows_full,
+        sample_target=settings.sample_target_rows,
+        seed=seed_for_path(storage_path),
+        max_cols=settings.max_columns,
+    )
+    return {
+        "df": loaded.df,
+        "classification": classify_columns(loaded.df),
+        "loaded": loaded,
+    }
+
+
+def dispose(prepared: PreparedFile | LoadedData) -> None:
+    """Release temp-file resources for a PreparedFile or a LoadedData."""
+    loaded = prepared if isinstance(prepared, LoadedData) else prepared.loaded
+    cleanup_loaded(loaded)
