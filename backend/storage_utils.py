@@ -17,8 +17,19 @@ from storage3.utils import StorageException
 
 
 def _is_not_found(exc: StorageException) -> bool:
+    """True when the storage gateway reported a missing object.
+
+    The gateway reports missing objects as statusCode 400 with code
+    ``NoSuchKey`` / ``not_found`` (and sometimes 404), so match on the
+    error code rather than the HTTP status alone.
+    """
     args = exc.args
-    return bool(args) and isinstance(args[0], dict) and args[0].get("statusCode") == 404
+    if not args or not isinstance(args[0], dict):
+        return False
+    payload = args[0]
+    code = str(payload.get("code") or "").lower()
+    message = str(payload.get("message") or "").lower()
+    return payload.get("statusCode") == 404 or code in ("nosuchkey", "not_found") or "object not found" in message
 
 
 def download_object(client: Any, storage_path: str) -> bytes | None:

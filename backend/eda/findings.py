@@ -191,8 +191,10 @@ def _missing_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
                        "other columns (MAR) before imputing."),
             "message": f"Missingness is {'consistent with' if mcar['mcar'] else 'NOT consistent with'} MCAR (p={_f(mcar['p_value'], 6)}).",
         })
-    patterns = summary.get("adaptive", {}).get("missing_pattern", {}).get("co_missing")
-    for key, cm in (patterns or {}).items():
+    patterns = summary.get("adaptive", {}).get("missing_pattern", {}).get("co_missing") or []
+    if isinstance(patterns, dict):
+        patterns = list(patterns.values())
+    for cm in patterns:
         if cm.get("share_both_missing", 0) > 0.1:
             out.append({
                 **_base("co_missing", "medium",
