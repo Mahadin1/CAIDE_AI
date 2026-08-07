@@ -187,14 +187,17 @@ def _jsonable(value: Any) -> Any:
     if isinstance(value, np.integer):
         return int(value)
     if isinstance(value, np.floating):
-        return float(value)
+        v = float(value)
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
     if isinstance(value, np.ndarray):
         return _jsonable(value.tolist())
     if isinstance(value, pd.Timestamp):
         return value.isoformat()
     if value is pd.NaT or value is pd.NA:
         return None
-    if isinstance(value, float) and math.isnan(value):
+    if isinstance(value, float) and (math.isnan(value) or math.isinf(value)):
         return None
     return value
 

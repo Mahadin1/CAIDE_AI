@@ -28,6 +28,7 @@ import httpx
 
 import agent
 import db as db_ops
+from storage_utils import download_source
 from config import settings
 from eda.errors import FriendlyError, TransientError
 
@@ -257,8 +258,7 @@ class Worker:
     @staticmethod
     def _download(client: Any, storage_path: str, filename: str) -> bytes | None:
         try:
-            content = client.storage.from_("uploads").download(storage_path)
-            return content
+            return download_source(client, storage_path)
         except FriendlyError:
             raise
         except httpx.HTTPError as exc:

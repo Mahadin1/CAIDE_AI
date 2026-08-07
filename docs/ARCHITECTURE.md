@@ -153,16 +153,27 @@ or newline-delimited), Parquet, Feather/Arrow.
 
 ## 5. Large-data strategy (eda/sampling.py, eda/streaming.py)
 
-The hard platform reality: **Supabase Storage rejects simple uploads above
-50 MiB** (413 `EntityTooLarge`, verified empirically — 52,428,800 bytes
-succeeds, 52,428,801 fails). The platform default applies even when the
-bucket's `file_size_limit` is NULL. Therefore:
+The hard platform reality: **Supabase Storage rejects uploads above 50 MiB**,
+on both the simple endpoint and the TUS resumable endpoint (413
+`Maximum size exceeded` at 52,428,801 bytes, verified empirically). The 50 MiB
+ceiling is the project's storage API `fileSizeLimit`, which the free plan
+cannot raise. Therefore:
 
-- **≤ 50 MiB**: browser simple upload (unchanged).
-- **> 50 MiB**: the frontend switches to Supabase's **resumable (TUS)
-  upload** (`duplex: 'half'`), which raises the ceiling to the plan's storage
-  quota. The backend is unchanged for this path — it still downloads via a
-  signed URL / service key.
+- **≤ 50 MiB**: browser simple upload (single object) — unchanged.
+- **> 50 MiB**: the frontend splits the file into **40 MiB parts** and uploads
+  each part with a **resumable (TUS) upload** to
+  `uploads/<user_id>/<file>/part-NNNNNN` (6 MiB TUS chunks, per-part resume on
+  network loss). A small `manifest.json` is written alongside the parts and
+  records `original_name`, `part_count`, `part_size`, `total_size` and
+  `content_type`. The `storage_path` stored on the upload row is the folder
+  (`uploads/<user_id>/<file>`).
+
+**Backend reassembly (`storage_utils.py`).** `download_source()` checks for a
+`manifest.json` sibling of `storage_path`; when present it downloads and
+concatenates `part-000000 … part-NNNNNN` in order, otherwise it falls back to
+the single-object download. Both the API endpoints (plan, exports, clean,
+subset) and the job worker go through this helper, so the whole pipeline treats
+a multi-part upload exactly like one contiguous file.
 
 **Backend analysis mode** is chosen automatically from the file after the
 first profile pass:
@@ -379,8 +390,8 @@ NARRATIVE_MAX_WORDS=1200
 
 - **LLM free-tier flakiness** → planner & narrator both fall back to fully
   deterministic equivalents; the report is always produced.
-- **50 MiB storage ceiling** → TUS resumable uploads on the frontend; backend
-  unchanged.
+- **50 MiB storage ceiling** → multi-part frontend upload (TUS per part) +
+  backend reassembly in `storage_utils.download_source`.
 - **Memory on huge files** → chunked streaming + deterministic sampling; the
   raw bytes are spooled to a tempfile instead of RAM above 100 MB.
 - **Cancellation of blocking compute** → all heavy work runs through
