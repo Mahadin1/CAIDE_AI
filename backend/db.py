@@ -22,6 +22,16 @@ def get_client() -> Client:
     return create_client(settings.supabase_url, settings.supabase_service_key)
 
 
+def _single_result(res: Any) -> dict[str, Any] | None:
+    """Guard around `.maybe_single().execute()`.
+
+    postgrest's sync client returns None (not a response object) when a
+    `.maybe_single()` query matches zero rows, so callers that read
+    `res.data` would crash. This normalizes both cases to a dict or None.
+    """
+    return res.data if res is not None else None
+
+
 # ---------------------------------------------------------------------------
 # profiles
 # ---------------------------------------------------------------------------
@@ -34,7 +44,7 @@ def get_profile(client: Client, user_id: str) -> dict[str, Any] | None:
         .maybe_single()
         .execute()
     )
-    return res.data
+    return _single_result(res)
 
 
 def get_or_create_profile(client: Client, user_id: str, email: str) -> dict[str, Any]:
@@ -56,7 +66,7 @@ def increment_reports_used(client: Client, user_id: str) -> None:
 
 def get_upload(client: Client, upload_id: str) -> dict[str, Any] | None:
     res = client.table("uploads").select("*").eq("id", upload_id).maybe_single().execute()
-    return res.data
+    return _single_result(res)
 
 
 def insert_upload(
@@ -165,7 +175,7 @@ def get_upload_with_user(client: Client, upload_id: str) -> dict[str, Any] | Non
         .maybe_single()
         .execute()
     )
-    return res.data
+    return _single_result(res)
 
 
 # ---------------------------------------------------------------------------
@@ -245,7 +255,7 @@ def get_report(client: Client, report_id: str) -> dict[str, Any] | None:
         .maybe_single()
         .execute()
     )
-    return res.data
+    return _single_result(res)
 
 
 def get_report_with_upload(client: Client, report_id: str) -> dict[str, Any] | None:
@@ -256,7 +266,7 @@ def get_report_with_upload(client: Client, report_id: str) -> dict[str, Any] | N
         .maybe_single()
         .execute()
     )
-    return res.data
+    return _single_result(res)
 
 
 def set_report_export_urls(
@@ -286,7 +296,7 @@ def get_subscription(client: Client, user_id: str) -> dict[str, Any] | None:
         .maybe_single()
         .execute()
     )
-    return res.data
+    return _single_result(res)
 
 
 def upsert_subscription(
@@ -321,8 +331,9 @@ def set_plan_by_subscription(
         .maybe_single()
         .execute()
     )
-    if res.data:
-        set_plan(client, res.data["user_id"], plan)
+    row = _single_result(res)
+    if row:
+        set_plan(client, row["user_id"], plan)
 
 
 # ---------------------------------------------------------------------------

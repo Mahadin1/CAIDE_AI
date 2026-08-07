@@ -1,4 +1,5 @@
 import { redirect } from "next/navigation";
+import Link from "next/link";
 import { createClient } from "@/lib/supabase/server";
 import { Logo } from "@/components/logo";
 import { Button } from "@/components/ui/button";
@@ -49,9 +50,12 @@ export default async function DashboardLayout({
             <Badge variant={profile?.plan === "pro" ? "info" : "secondary"}>
               {profile?.plan === "pro" ? "Pro" : "Free"}
             </Badge>
-            <span className="hidden text-sm text-muted md:block">
+            <Link
+              href="/dashboard/account"
+              className="hidden text-sm text-muted hover:text-foreground md:block"
+            >
               {profile?.name ?? profile?.email ?? user.email}
-            </span>
+            </Link>
             <SignOutButton />
           </div>
         </div>

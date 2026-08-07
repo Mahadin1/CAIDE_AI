@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { UploadCloud, FileText, X, Loader2 } from "lucide-react";
+import { UploadCloud, FileText, X, Loader2, Play } from "lucide-react";
 import { createClient } from "@/lib/supabase/client";
 import { cn, formatBytes } from "@/lib/utils";
 import { uploadLargeFile, DIRECT_UPLOAD_LIMIT } from "@/lib/tus";
@@ -66,6 +66,11 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
   const [uploadProgress, setUploadProgress] = useState(0);
   const [resumable, setResumable] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+  const overridesRef = useRef<Overrides>({
+    column_types: {},
+    exclude_columns: [],
+    custom_questions: [],
+  });
 
   const stopPolling = useCallback(() => {
     if (pollTimer.current) {
@@ -209,6 +214,7 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
 
   const startAnalysis = async (overrides: Overrides) => {
     if (!plan) return;
+    overridesRef.current = overrides;
     setError(null);
     setPhase("analyzing");
 
@@ -268,7 +274,7 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
             code: "analyze",
             message: j.error_message ?? "Analysis failed. Please try again.",
           });
-          setPhase("review");
+          setPhase("failed");
         }
       } catch {
         // transient poll failure — keep waiting
@@ -339,11 +345,14 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
               <>
                 <UploadCloud className="h-10 w-10 text-[#fafafa]" />
                 <p className="mt-4 font-medium">
-                  Drop your data here, or click to browse
+                  {disabled
+                    ? "Another analysis is running"
+                    : "Drop your data here, or click to browse"}
                 </p>
                 <p className="mt-1 text-sm text-muted">
-                  {ACCEPT_LABEL} · files up to 50 MiB upload directly, larger files use
-                  resumable multi-part transfer
+                  {disabled
+                    ? "Uploads are paused until the current analysis finishes."
+                    : `${ACCEPT_LABEL} · files up to 50 MiB upload directly, larger files use resumable multi-part transfer`}
                 </p>
               </>
             )}
@@ -393,7 +402,32 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
         </div>
       )}
 
-      {error && (
+      {/* Failed state */}
+      {phase === "failed" && (
+        <div className="card-panel p-6">
+          <p className="text-sm font-medium text-[#f87171]">
+            The analysis failed
+          </p>
+          {error && <p className="mt-1 text-sm text-muted">{error.message}</p>}
+          <div className="mt-4 flex items-center gap-2">
+            <Button
+              size="sm"
+              onClick={() => startAnalysis(overridesRef.current)}
+            >
+              <Play className="h-4 w-4" /> Try again
+            </Button>
+            <Button variant="ghost" size="sm" onClick={reset}>
+              Start over
+            </Button>
+          </div>
+          <p className="mt-3 text-xs text-muted">
+            You can also retry later from the failed row on the dashboard, or
+            upload a different file meanwhile.
+          </p>
+        </div>
+      )}
+
+      {error && phase !== "failed" && (
         <div className="rounded-md border border-[#3a1a1a] bg-[#3a1a1a]/40 p-4">
           <p className="text-sm text-[#f87171]">{error.message}</p>
           {error.code === "limit" && (

@@ -35,7 +35,7 @@ export function UploadRow({
   onStatusChange,
 }: {
   upload: Upload;
-  onStatusChange?: (id: string, status: Upload["status"]) => void;
+  onStatusChange?: (id: string, status: Upload["status"] | "deleted") => void;
 }) {
   const [live, setLive] = useState<JobStatus | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -46,7 +46,7 @@ export function UploadRow({
     (live?.status ?? upload.status) === "processing" ||
     (live?.status ?? upload.status) === "pending";
 
-  const notify = (status: Upload["status"]) => {
+  const notify = (status: Upload["status"] | "deleted") => {
     if (status !== upload.status) onStatusChange?.(upload.id, status);
   };
 
@@ -188,44 +188,46 @@ export function UploadRow({
           </Link>
         )}
 
-        <RowMenu
-          ariaLabel={`Options for ${upload.filename}`}
-          items={[
-            ...(status === "done" && reportId
-              ? [
-                  {
-                    label: "View report",
-                    icon: <Eye className="h-4 w-4" />,
-                    href: `/dashboard/reports/${reportId}`,
-                  },
-                  {
-                    label: "Download PDF",
-                    icon: <Download className="h-4 w-4" />,
-                    href: `/api/reports/${reportId}/pdf`,
-                    download: true,
-                  },
-                  {
-                    label: "Download HTML",
-                    icon: <FileCode className="h-4 w-4" />,
-                    href: `/api/reports/${reportId}/html`,
-                    download: true,
-                  },
-                  {
-                    label: "Download cleaned CSV",
-                    icon: <FileSpreadsheet className="h-4 w-4" />,
-                    href: `/api/reports/${reportId}/clean`,
-                    download: true,
-                  },
-                ]
-              : []),
-            {
-              label: deleting ? "Deleting…" : "Delete",
-              icon: <Trash2 className="h-4 w-4" />,
-              onClick: handleDelete,
-              danger: true,
-            },
-          ]}
-        />
+        {!busy && (
+          <RowMenu
+            ariaLabel={`Options for ${upload.filename}`}
+            items={[
+              ...(status === "done" && reportId
+                ? [
+                    {
+                      label: "View report",
+                      icon: <Eye className="h-4 w-4" />,
+                      href: `/dashboard/reports/${reportId}`,
+                    },
+                    {
+                      label: "Download PDF",
+                      icon: <Download className="h-4 w-4" />,
+                      href: `/api/reports/${reportId}/pdf`,
+                      download: true,
+                    },
+                    {
+                      label: "Download HTML",
+                      icon: <FileCode className="h-4 w-4" />,
+                      href: `/api/reports/${reportId}/html`,
+                      download: true,
+                    },
+                    {
+                      label: "Download cleaned CSV",
+                      icon: <FileSpreadsheet className="h-4 w-4" />,
+                      href: `/api/reports/${reportId}/clean`,
+                      download: true,
+                    },
+                  ]
+                : []),
+              {
+                label: deleting ? "Deleting…" : "Delete",
+                icon: <Trash2 className="h-4 w-4" />,
+                onClick: handleDelete,
+                danger: true,
+              },
+            ]}
+          />
+        )}
       </div>
     </div>
   );

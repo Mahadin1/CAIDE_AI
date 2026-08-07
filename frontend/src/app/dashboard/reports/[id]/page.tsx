@@ -3,6 +3,7 @@ import { notFound } from "next/navigation";
 import { ArrowLeft, Download, FileCode, FileSpreadsheet } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { ReportCharts } from "@/components/report/report-charts";
+import { ReportOverview } from "@/components/report/report-overview";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -118,6 +119,9 @@ export default async function ReportPage({
           )}
         </div>
       </div>
+
+      {/* At a glance — plain-English summary of the dataset */}
+      <ReportOverview summary={summary} />
 
       {/* Sample notice */}
       {sample && sample.mode === "sample" && (

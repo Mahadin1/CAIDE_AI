@@ -1,11 +1,9 @@
 import Link from "next/link";
 import { Plus } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
-import { UploadFlow } from "@/components/dashboard/upload-flow";
-import { UploadRow } from "@/components/dashboard/upload-row";
+import { UploadsSection } from "@/components/dashboard/uploads-section";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import type { Profile, Upload } from "@/lib/types";
 
 export const dynamic = "force-dynamic";
@@ -66,36 +64,8 @@ export default async function DashboardPage() {
         </CardContent>
       </Card>
 
-      {/* Upload */}
-      <section id="upload">
-        <h2 className="mb-4 text-lg font-medium">New analysis</h2>
-        <UploadFlow />
-      </section>
-
-      {/* History */}
-      <section>
-        <div className="mb-4 flex items-center justify-between">
-          <h2 className="text-lg font-medium">Your uploads</h2>
-          {uploads && uploads.length > 0 && (
-            <Badge variant="secondary">{uploads.length}</Badge>
-          )}
-        </div>
-
-        {!uploads || uploads.length === 0 ? (
-          <div className="card-panel p-10 text-center">
-            <p className="font-medium">No analyses yet</p>
-            <p className="mt-1 text-sm text-muted">
-              Drop your first dataset above and the agent will build your first report.
-            </p>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            {uploads.map((upload) => (
-              <UploadRow key={upload.id} upload={upload} />
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Upload + history (live client area) */}
+      <UploadsSection initialUploads={uploads ?? []} />
     </div>
   );
 }

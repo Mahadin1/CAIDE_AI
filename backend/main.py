@@ -347,7 +347,7 @@ async def job_status(
             .maybe_single()
             .execute()
         )
-        report = res.data
+        report = res.data if res is not None else None
 
     return {
         "job_id": upload_id,
@@ -497,7 +497,7 @@ async def delete_upload(
         .maybe_single()
         .execute()
     )
-    if res.data:
+    if res is not None and res.data:
         db_ops.delete_report_and_upload(client, res.data["id"])
     else:
         sp = upload.get("storage_path") or ""

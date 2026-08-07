@@ -32,7 +32,6 @@ const GRID = "#1f1f1f";
 // Mirrors the thresholds of the same name in agent.py's select_findings /
 // pdf.py, so a chart only appears here when the narrative also considers
 // it worth mentioning.
-const SKEW_THRESHOLD = 1.0;
 const GROUP_DIFFERENCE_MIN_EFFECT = 0.5;
 const CRAMERS_V_ASSOCIATION_THRESHOLD = 0.3;
 const TREND_CORR_THRESHOLD = 0.5;
@@ -450,7 +449,56 @@ function TimeTrendChart({ column, trend }: { column: string; trend: TimeTrendEnt
 }
 
 /* ------------------------------------------------------------------ */
-/* Auto-selection wrapper — only charts relevant to flagged findings   */
+/* Strongest correlations — top |r| pairs as a horizontal bar          */
+/* ------------------------------------------------------------------ */
+function CorrelationBarChart({ pairs }: { pairs: { a: string; b: string; r: number }[] }) {
+  const data = pairs.map((c) => ({
+    pair: `${c.a} × ${c.b}`,
+    r: Math.round(c.r * 1000) / 10,
+  }));
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Strongest correlations</CardTitle>
+        <CardDescription>
+          r × 100, so +100 is a perfect positive relationship and -100 a
+          perfect negative one.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="h-72">
+        <ResponsiveContainer width="100%" height="100%">
+          <BarChart
+            data={data}
+            layout="vertical"
+            margin={{ top: 4, right: 24, left: 8, bottom: 0 }}
+          >
+            <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+            <XAxis
+              type="number"
+              domain={[-100, 100]}
+              tick={{ fill: "#888888", fontSize: 11 }}
+            />
+            <YAxis
+              type="category"
+              dataKey="pair"
+              width={140}
+              tick={{ fill: "#888888", fontSize: 11 }}
+            />
+            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Bar dataKey="r" radius={[0, 3, 3, 0]}>
+              {data.map((d) => (
+                <Cell key={d.pair} fill={Math.abs(d.r) >= 70 ? ACCENT : MUTED} />
+              ))}
+            </Bar>
+          </BarChart>
+        </ResponsiveContainer>
+      </CardContent>
+    </Card>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Auto-selection wrapper — every chart the PDF would render           */
 /* ------------------------------------------------------------------ */
 // Columns the classifier re-labelled as non-categorical should never be
 // charted as a normal category (they are covered by their own findings).
@@ -461,6 +509,10 @@ const NON_CATEGORICAL_KINDS = new Set([
   "constant",
   "empty",
 ]);
+const MAX_HISTOGRAM_CHARTS = 6;
+const MAX_CATEGORY_CHARTS = 4;
+const MAX_CORRELATION_PAIRS = 5;
+const MIN_CORRELATION_TO_CHART = 0.3;
 export function ReportCharts({ summary, reportId }: { summary: Summary; reportId?: string }) {
   const [drill, setDrill] = useState<{
     column: string;
@@ -468,7 +520,7 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
     title: string;
   } | null>(null);
   const classification = summary.column_classification ?? {};
-  const missingFlagged = Object.values(summary.missing_pct).some((p) => p > 20);
+  const anyMissing = Object.values(summary.missing_pct ?? {}).some((p) => p > 0);
   const corrFlagged = Object.entries(summary.correlations).some(([a, targets]) =>
     Object.entries(targets).some(
       ([b, r]) => a > b && r != null && Math.abs(r as number) > 0.7
@@ -479,21 +531,27 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
     .sort((a, b) => b[1].share - a[1].share)
     .slice(0, 3)
     .map(([col]) => col);
-  const catColumns = Object.entries(summary.categorical_summary)
+  // All categorical columns the PDF would chart (top values), not just
+  // dominant ones — capped the same way as the PDF export.
+  const catColumns = Object.entries(summary.categorical_summary ?? {})
     .filter(([col, info]) => {
       const kind = classification[col]?.kind;
       if (kind && NON_CATEGORICAL_KINDS.has(kind)) return false;
-      return info.cardinality > 1 && info.top[0]?.share > 0.9;
+      return info.cardinality > 1 && info.top[0]?.share > 0;
     })
+    .sort((a, b) => b[1].top[0].share - a[1].top[0].share)
+    .slice(0, MAX_CATEGORY_CHARTS)
     .map(([col]) => col);
 
-  // Heavily skewed numeric columns — same threshold agent.py uses to flag
-  // the "median is safer than the mean" finding.
-  const skewedColumns = Object.entries(summary.numeric_stats)
-    .map(([col, stats]) => [col, stats.skew] as const)
-    .filter((entry): entry is [string, number] => entry[1] != null && Math.abs(entry[1]) > SKEW_THRESHOLD)
-    .sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]))
-    .slice(0, 3);
+  // All pre-computed histograms, skewed columns first (PDF charts all of
+  // them, capped at MAX_HISTOGRAM_CHARTS).
+  const histograms = summary.histograms ?? {};
+  const histogramColumns = Object.keys(histograms)
+    .map((col) => [col, summary.numeric_stats?.[col]?.skew] as const)
+    .filter(([col]) => histograms[col]?.counts?.length)
+    .sort((a, b) => Math.abs(b[1] ?? 0) - Math.abs(a[1] ?? 0))
+    .slice(0, MAX_HISTOGRAM_CHARTS)
+    .map(([col]) => col);
 
   // Notable numeric-by-category comparisons, strongest effect size first.
   const groupComparisons = Object.values(summary.numeric_by_categorical ?? {})
@@ -513,8 +571,21 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
     .sort((a, b) => Math.abs(b[1].trend_correlation) - Math.abs(a[1].trend_correlation))
     .slice(0, 3);
 
+  // Strongest correlation pairs (PDF _correlation_bar_section).
+  const corrPairs: { a: string; b: string; r: number }[] = [];
+  for (const [a, targets] of Object.entries(summary.correlations ?? {})) {
+    for (const [b, r] of Object.entries(targets)) {
+      if (a >= b || r == null) continue;
+      corrPairs.push({ a, b, r: r as number });
+    }
+  }
+  corrPairs.sort((x, y) => Math.abs(y.r) - Math.abs(x.r));
+  const topCorr = corrPairs
+    .filter((c) => Math.abs(c.r) >= MIN_CORRELATION_TO_CHART)
+    .slice(0, MAX_CORRELATION_PAIRS);
+
   const charts = [];
-  if (missingFlagged) charts.push(<MissingValuesChart key="missing" summary={summary} />);
+  if (anyMissing) charts.push(<MissingValuesChart key="missing" summary={summary} />);
   if (corrFlagged) charts.push(<CorrelationHeatmap key="corr" summary={summary} />);
   if (outlierColumns.length > 0)
     charts.push(
@@ -522,14 +593,16 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
         <OutlierScatter key={`outlier-${col}`} column={col} info={summary.outliers[col]} />
       ))
     );
-  if (skewedColumns.length > 0) {
-    const histograms = summary.histograms ?? {};
+  if (histogramColumns.length > 0) {
     charts.push(
-      ...skewedColumns
-        .filter(([col]) => histograms[col])
-        .map(([col, skew]) => (
-          <HistogramChart key={`hist-${col}`} column={col} hist={histograms[col]} skew={skew} />
-        ))
+      ...histogramColumns.map((col) => (
+        <HistogramChart
+          key={`hist-${col}`}
+          column={col}
+          hist={histograms[col]}
+          skew={summary.numeric_stats?.[col]?.skew ?? null}
+        />
+      ))
     );
   }
   if (catColumns.length > 0)
@@ -555,6 +628,8 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
     );
   if (associations.length > 0)
     charts.push(<CategoricalAssociationChart key="associations" entries={associations} />);
+  if (topCorr.length > 0)
+    charts.push(<CorrelationBarChart key="corr-bar" pairs={topCorr} />);
   if (trends.length > 0)
     charts.push(
       ...trends.map(([col, trend]) => (
