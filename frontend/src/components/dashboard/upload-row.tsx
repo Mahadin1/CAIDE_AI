@@ -2,9 +2,22 @@
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { FileText, ArrowRight, Loader2 } from "lucide-react";
-import { cn, timeAgo } from "@/lib/utils";
+import {
+  ArrowRight,
+  FileCode,
+  FileSpreadsheet,
+  FileText,
+  Loader2,
+  Play,
+  Download,
+  Trash2,
+  Eye,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { RelativeTime } from "@/components/relative-time";
+import { RowMenu } from "@/components/dashboard/row-menu";
 import type { JobStatus, Upload } from "@/lib/types";
 
 const statusMeta: Record<
@@ -17,13 +30,25 @@ const statusMeta: Record<
   failed: { label: "Failed", variant: "danger" },
 };
 
-export function UploadRow({ upload }: { upload: Upload }) {
+export function UploadRow({
+  upload,
+  onStatusChange,
+}: {
+  upload: Upload;
+  onStatusChange?: (id: string, status: Upload["status"]) => void;
+}) {
   const [live, setLive] = useState<JobStatus | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const busy =
     (live?.status ?? upload.status) === "processing" ||
     (live?.status ?? upload.status) === "pending";
+
+  const notify = (status: Upload["status"]) => {
+    if (status !== upload.status) onStatusChange?.(upload.id, status);
+  };
 
   useEffect(() => {
     if (!busy) return;
@@ -35,6 +60,7 @@ export function UploadRow({ upload }: { upload: Upload }) {
         setLive(job);
         if (job.status === "done" || job.status === "failed") {
           if (pollTimer.current) clearInterval(pollTimer.current);
+          notify(job.status);
         }
       } catch {
         // transient — keep polling
@@ -43,6 +69,7 @@ export function UploadRow({ upload }: { upload: Upload }) {
     return () => {
       if (pollTimer.current) clearInterval(pollTimer.current);
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [upload.id, busy]);
 
   const status = live?.status ?? upload.status;
@@ -51,6 +78,48 @@ export function UploadRow({ upload }: { upload: Upload }) {
   const stageLabel = live?.stage_label ?? upload.stage_label;
   const progress = live?.progress ?? upload.progress;
   const errorMessage = live?.error_message ?? upload.error_message;
+
+  const handleRetry = async () => {
+    setRetrying(true);
+    try {
+      const res = await fetch("/api/analyze/retry", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ upload_id: upload.id }),
+      });
+      if (res.ok) {
+        onStatusChange?.(upload.id, "pending");
+      } else {
+        const data = await res.json().catch(() => ({}));
+        setLive((prev) => ({
+          ...(prev ?? ({} as JobStatus)),
+          status: "failed",
+          error_message: data.detail ?? "Retry failed. Please try again.",
+        }));
+      }
+    } catch {
+      // transient network error — leave the button usable
+    } finally {
+      setRetrying(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!window.confirm("Delete this analysis and its report? This cannot be undone.")) {
+      return;
+    }
+    setDeleting(true);
+    try {
+      const res = await fetch(`/api/uploads/${upload.id}/delete`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        onStatusChange?.(upload.id, "deleted");
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
 
   return (
     <div
@@ -67,7 +136,9 @@ export function UploadRow({ upload }: { upload: Upload }) {
         )}
         <div className="min-w-0">
           <p className="truncate text-sm font-medium">{upload.filename}</p>
-          <p className="text-xs text-muted">{timeAgo(upload.created_at)}</p>
+          <p className="text-xs text-muted">
+            <RelativeTime date={upload.created_at} />
+          </p>
           {busy && stageLabel && (
             <p className="mt-0.5 text-xs text-[#fafafa]">
               {stageLabel}
@@ -96,6 +167,18 @@ export function UploadRow({ upload }: { upload: Upload }) {
           </Badge>
         )}
         <Badge variant={meta.variant}>{meta.label}</Badge>
+
+        {status === "failed" && (
+          <Button onClick={handleRetry} size="sm" disabled={retrying}>
+            {retrying ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Play className="h-4 w-4" />
+            )}
+            Try again
+          </Button>
+        )}
+
         {status === "done" && reportId && (
           <Link
             href={`/dashboard/reports/${reportId}`}
@@ -104,6 +187,45 @@ export function UploadRow({ upload }: { upload: Upload }) {
             View report <ArrowRight className="h-4 w-4" />
           </Link>
         )}
+
+        <RowMenu
+          ariaLabel={`Options for ${upload.filename}`}
+          items={[
+            ...(status === "done" && reportId
+              ? [
+                  {
+                    label: "View report",
+                    icon: <Eye className="h-4 w-4" />,
+                    href: `/dashboard/reports/${reportId}`,
+                  },
+                  {
+                    label: "Download PDF",
+                    icon: <Download className="h-4 w-4" />,
+                    href: `/api/reports/${reportId}/pdf`,
+                    download: true,
+                  },
+                  {
+                    label: "Download HTML",
+                    icon: <FileCode className="h-4 w-4" />,
+                    href: `/api/reports/${reportId}/html`,
+                    download: true,
+                  },
+                  {
+                    label: "Download cleaned CSV",
+                    icon: <FileSpreadsheet className="h-4 w-4" />,
+                    href: `/api/reports/${reportId}/clean`,
+                    download: true,
+                  },
+                ]
+              : []),
+            {
+              label: deleting ? "Deleting…" : "Delete",
+              icon: <Trash2 className="h-4 w-4" />,
+              onClick: handleDelete,
+              danger: true,
+            },
+          ]}
+        />
       </div>
     </div>
   );

@@ -84,6 +84,15 @@ class AnalyzeResponse(BaseModel):
     status: str
 
 
+class RetryRequest(BaseModel):
+    user_id: str
+    upload_id: str
+
+
+class AccountDeleteRequest(BaseModel):
+    user_id: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -290,6 +299,30 @@ async def analyze(req: AnalyzeRequest) -> AnalyzeResponse:
     return AnalyzeResponse(job_id=upload_id, status="pending")
 
 
+@app.post("/analyze/retry", response_model=AnalyzeResponse)
+async def analyze_retry(req: RetryRequest) -> AnalyzeResponse:
+    """Re-queue a failed analysis. The upload row is reset and pushed to the
+    worker; the file is not re-uploaded."""
+    _require_config()
+    client = db_ops.get_client()
+    upload_id = _parse_upload_id(req.upload_id)
+    upload = db_ops.get_upload(client, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    _check_ownership(upload, req.user_id)
+
+    if upload["status"] != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Only failed analyses can be retried.",
+        )
+
+    db_ops.reset_upload_failed(client, upload_id)
+    await worker.submit(upload_id)
+    logger.info("job retried upload=%s", upload_id)
+    return AnalyzeResponse(job_id=upload_id, status="pending")
+
+
 # ---------------------------------------------------------------------------
 # Job status (polling)
 # ---------------------------------------------------------------------------
@@ -430,6 +463,70 @@ async def download_clean(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="clean_{safe}"'},
     )
+
+
+@app.delete("/reports/{report_id}")
+async def delete_report(
+    report_id: str, user_id: str = Query(...)
+) -> Response:
+    """Delete a report, its upload history entry, and the stored source file."""
+    _require_config()
+    client = db_ops.get_client()
+    _get_report_owned(client, report_id, user_id)
+    db_ops.delete_report_and_upload(client, report_id)
+    logger.info("report deleted report=%s", report_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.delete("/uploads/{upload_id}")
+async def delete_upload(
+    upload_id: str, user_id: str = Query(...)
+) -> Response:
+    """Delete an upload history entry (and any report + source file)."""
+    _require_config()
+    client = db_ops.get_client()
+    upload = db_ops.get_upload(client, upload_id)
+    if upload is None:
+        raise HTTPException(status_code=404, detail="Upload not found")
+    _check_ownership(upload, user_id)
+
+    res = (
+        client.table("reports")
+        .select("id")
+        .eq("upload_id", upload_id)
+        .maybe_single()
+        .execute()
+    )
+    if res.data:
+        db_ops.delete_report_and_upload(client, res.data["id"])
+    else:
+        sp = upload.get("storage_path") or ""
+        if sp.startswith("uploads/"):
+            try:
+                client.storage.from_("uploads").remove([sp[len("uploads/"):]])
+            except Exception:  # noqa: BLE001
+                pass
+        client.table("uploads").delete().eq("id", upload_id).execute()
+    logger.info("upload deleted upload=%s", upload_id)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@app.post("/account/delete")
+async def delete_account(req: AccountDeleteRequest) -> dict[str, str]:
+    """Self-serve account deletion: removes all data and the auth user."""
+    _require_config()
+    client = db_ops.get_client()
+    profile = db_ops.get_profile(client, req.user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    db_ops.delete_user_data(client, req.user_id)
+    try:
+        client.auth.admin.delete_user(req.user_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("admin delete user %s failed: %s", req.user_id, exc)
+    logger.info("account deleted user=%s", req.user_id)
+    return {"status": "deleted"}
 
 
 @app.get("/reports/{report_id}/subset")

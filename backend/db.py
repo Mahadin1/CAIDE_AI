@@ -323,3 +323,71 @@ def set_plan_by_subscription(
     )
     if res.data:
         set_plan(client, res.data["user_id"], plan)
+
+
+# ---------------------------------------------------------------------------
+# deletion / account
+# ---------------------------------------------------------------------------
+
+def reset_upload_failed(client: Client, upload_id: str) -> None:
+    """Put a failed upload back in the queue (retry)."""
+    client.table("uploads").update({
+        "status": "pending",
+        "stage": "queued",
+        "stage_label": "Queued for analysis…",
+        "progress": 5,
+        "error_message": None,
+        "attempts": 0,
+    }).eq("id", upload_id).execute()
+
+
+def delete_report_and_upload(client: Client, report_id: str) -> None:
+    """Remove a report row plus its upload row and the stored source file."""
+    report = get_report(client, report_id)
+    if report is None:
+        return
+    client.table("reports").delete().eq("id", report_id).execute()
+    upload_id = report.get("upload_id")
+    if not upload_id:
+        return
+    upload = get_upload(client, upload_id)
+    if upload is not None:
+        sp = upload.get("storage_path") or ""
+        if sp.startswith("uploads/"):
+            try:
+                client.storage.from_("uploads").remove([sp[len("uploads/"):]])
+            except Exception:  # noqa: BLE001
+                pass
+        client.table("uploads").delete().eq("id", upload_id).execute()
+
+
+def delete_user_data(client: Client, user_id: str) -> None:
+    """Remove every report, upload, source file and profile of a user.
+
+    Used by the self-serve "delete account" flow. Ordering matters: reports
+    reference uploads, so reports go first; storage objects are deleted by
+    removing the user's whole folder prefix.
+    """
+    uploads = (
+        client.table("uploads")
+        .select("id")
+        .eq("user_id", user_id)
+        .execute()
+    )
+    upload_ids = [u["id"] for u in uploads.data]
+    if upload_ids:
+        client.table("reports").delete().in_("upload_id", upload_ids).execute()
+        client.table("uploads").delete().eq("user_id", user_id).execute()
+    try:
+        client.storage.from_("uploads").remove([f"{user_id}"])
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        client.table("subscriptions").delete().eq("user_id", user_id).execute()
+    except Exception:  # noqa: BLE001
+        pass
+    try:
+        client.table("profiles").delete().eq("id", user_id).execute()
+    except Exception:  # noqa: BLE001
+        pass
+        set_plan(client, res.data["user_id"], plan)

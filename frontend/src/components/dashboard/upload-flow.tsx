@@ -54,7 +54,7 @@ function isSupported(name: string): boolean {
   ].includes(ext);
 }
 
-export function UploadFlow() {
+export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
   const router = useRouter();
   const inputRef = useRef<HTMLInputElement>(null);
   const [dragOver, setDragOver] = useState(false);
@@ -76,26 +76,31 @@ export function UploadFlow() {
 
   useEffect(() => stopPolling, [stopPolling]);
 
-  const pickFile = useCallback((candidate: File | undefined | null) => {
-    setError(null);
-    if (!candidate) return;
-    if (!isSupported(candidate.name)) {
-      setError({
-        code: "type",
-        message: `Unsupported file type. We accept ${ACCEPT_LABEL}.`,
-      });
-      return;
-    }
-    setFile(candidate);
-  }, []);
+  const pickFile = useCallback(
+    (candidate: File | undefined | null) => {
+      if (disabled) return;
+      setError(null);
+      if (!candidate) return;
+      if (!isSupported(candidate.name)) {
+        setError({
+          code: "type",
+          message: `Unsupported file type. We accept ${ACCEPT_LABEL}.`,
+        });
+        return;
+      }
+      setFile(candidate);
+    },
+    [disabled]
+  );
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
       setDragOver(false);
+      if (disabled) return;
       pickFile(e.dataTransfer.files?.[0]);
     },
-    [pickFile]
+    [disabled, pickFile]
   );
 
   const reset = () => {
@@ -111,7 +116,7 @@ export function UploadFlow() {
   };
 
   const uploadAndPlan = async () => {
-    if (!file) return;
+    if (!file || disabled) return;
     setError(null);
     setPhase("uploading");
 
@@ -283,18 +288,21 @@ export function UploadFlow() {
         <>
           <div
             role="button"
-            tabIndex={0}
-            onClick={() => inputRef.current?.click()}
-            onKeyDown={(e) => e.key === "Enter" && inputRef.current?.click()}
+            tabIndex={disabled ? -1 : 0}
+            onClick={() => !disabled && inputRef.current?.click()}
+            onKeyDown={(e) =>
+              !disabled && e.key === "Enter" && inputRef.current?.click()
+            }
             onDragOver={(e) => {
               e.preventDefault();
-              setDragOver(true);
+              if (!disabled) setDragOver(true);
             }}
             onDragLeave={() => setDragOver(false)}
             onDrop={handleDrop}
             className={cn(
               "card-panel flex cursor-pointer flex-col items-center justify-center px-6 py-12 text-center transition-colors",
-              dragOver && "border-[#fafafa]"
+              dragOver && "border-[#fafafa]",
+              disabled && "cursor-not-allowed opacity-60"
             )}
           >
             <input
