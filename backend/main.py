@@ -39,6 +39,11 @@ from worker import worker
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("datascope")
 
+_KNOWN_FORMATS = {
+    "csv", "tsv", "xlsx", "xls", "ods", "json", "jsonl", "parquet",
+    "feather", "txt",
+}
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -79,6 +84,14 @@ class AnalyzeRequest(BaseModel):
     overrides: dict[str, Any] | None = None
 
 
+class UploadSaveRequest(BaseModel):
+    user_id: str
+    upload_id: str
+    storage_path: str
+    filename: str = ""
+    file_size_bytes: int | None = None
+
+
 class AnalyzeResponse(BaseModel):
     job_id: str
     status: str
@@ -114,23 +127,27 @@ def _check_ownership(upload: dict[str, Any], user_id: str) -> None:
 
 
 def _check_quota(client, user_id: str) -> None:
-    """Server-side free-tier enforcement (never trust the UI)."""
+    """Server-side credit enforcement (never trust the UI).
+
+    Every plan is credit-based and finite: one analysis consumes one credit.
+    Credits reset monthly per the plan's allowance (see config.plan_monthly_credits).
+    """
     profile = db_ops.get_profile(client, user_id)
     if profile is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Profile not found",
         )
-    if profile.get("plan") == "free":
-        used = int(profile.get("reports_this_month") or 0)
-        if used >= settings.free_monthly_limit:
-            raise HTTPException(
-                status_code=status.HTTP_402_PAYMENT_REQUIRED,
-                detail=(
-                    "You've used all your free reports for this month. "
-                    "Upgrade to Pro for unlimited analyses."
-                ),
-            )
+    credits = int(profile.get("credits") or 0)
+    if credits <= 0:
+        raise HTTPException(
+            status_code=status.HTTP_402_PAYMENT_REQUIRED,
+            detail=(
+                "You're out of analysis credits for this month. "
+                "Upgrade to a larger plan, or wait for your monthly credit "
+                "reset."
+            ),
+        )
 
 
 def _check_pro(client, user_id: str) -> None:
@@ -173,6 +190,48 @@ async def health() -> dict[str, Any]:
 # Plan preview (synchronous) + analyze (async job)
 # ---------------------------------------------------------------------------
 
+@app.post("/uploads", response_model=dict)
+async def save_upload(req: UploadSaveRequest) -> dict[str, Any]:
+    """Register a newly uploaded file in the Files section (status='ready').
+
+    This is a *save only* operation: nothing is profiled or queued here. The
+    user opens the file and decides what to do with it on its own page.
+    """
+    _require_config()
+    client = db_ops.get_client()
+    upload_id = _parse_upload_id(req.upload_id)
+
+    prefix = f"uploads/{req.user_id}/"
+    if not req.storage_path.startswith(prefix):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="storage_path does not belong to this user",
+        )
+    existing = db_ops.get_upload(client, str(upload_id))
+    if existing is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="This file has already been saved.",
+        )
+    fmt = req.filename.rsplit(".", 1)[-1].lower() if req.filename else None
+    row = db_ops.insert_upload_file(
+        client,
+        upload_id,
+        req.user_id,
+        req.filename or req.storage_path.rsplit("/", 1)[-1],
+        req.storage_path,
+        file_size_bytes=req.file_size_bytes,
+        source_format=fmt if fmt in _KNOWN_FORMATS else None,
+    )
+    return {
+        "id": row["id"],
+        "status": row["status"],
+        "filename": row["filename"],
+        "storage_path": row["storage_path"],
+        "created_at": row["created_at"],
+    }
+
+
 @app.post("/analyze/plan", response_model=dict)
 async def analyze_plan(req: AnalyzePlanRequest) -> dict[str, Any]:
     """Download the file, profile it, and produce an LLM analysis plan for
@@ -201,14 +260,25 @@ async def analyze_plan(req: AnalyzePlanRequest) -> dict[str, Any]:
         agent.prepare, content, req.filename or "", req.storage_path
     )
     try:
+        # Prior-report context so the planner can propose distribution_drift.
+        prior_report = db_ops.get_most_recent_report(
+            client, req.user_id, exclude_upload_id=str(upload_id)
+        )
+        await asyncio.to_thread(
+            agent.attach_prior_context, prepared, prior_report
+        )
         await agent.plan_file(prepared, req.overrides)
 
         overrides = req.overrides or {}
-        db_ops.insert_upload(
-            client, upload_id, req.user_id,
-            req.filename or req.storage_path.rsplit("/", 1)[-1],
-            req.storage_path, "pending",
-        )
+        # The upload row already exists when the file was saved first (status
+        # 'ready'); plan again just updates its metadata. Otherwise insert.
+        existing = db_ops.get_upload(client, str(upload_id))
+        if existing is None:
+            db_ops.insert_upload(
+                client, upload_id, req.user_id,
+                req.filename or req.storage_path.rsplit("/", 1)[-1],
+                req.storage_path, "ready",
+            )
         db_ops.set_upload_meta(
             client, upload_id,
             stage="review",

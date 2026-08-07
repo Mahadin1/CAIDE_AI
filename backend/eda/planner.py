@@ -38,6 +38,9 @@ KNOWN_TASK_TYPES = {
     "time_features", "seasonality", "duplicate_ids", "date_as_text",
     "mixed_type_cleanup", "text_top_words", "group_comparison",
     "cardinality_sanity", "custom_question",
+    "category_harmonization", "outlier_subpopulation", "data_quality_score",
+    "text_theme_extraction", "distribution_drift",
+    "pattern_extraction_proposal",
 }
 
 PLANNER_SYSTEM_PROMPT = (
@@ -54,7 +57,9 @@ PLANNER_SYSTEM_PROMPT = (
     "anova_kruskal, spearman_sig, cramer_v, vif, trend_mannkendall, "
     "time_features, seasonality, duplicate_ids, date_as_text, "
     "mixed_type_cleanup, text_top_words, group_comparison, "
-    "cardinality_sanity, custom_question\n\n"
+    "cardinality_sanity, category_harmonization, outlier_subpopulation, "
+    "data_quality_score, text_theme_extraction, distribution_drift, "
+    "pattern_extraction_proposal, custom_question\n\n"
     "Rules:\n"
     "- Choose 5 to 12 tasks that best fit THIS dataset's story. Do not pick "
     "tasks the data cannot support (e.g. time_features with no date-like "
@@ -62,6 +67,19 @@ PLANNER_SYSTEM_PROMPT = (
     "- Prefer deep, non-boring checks: correlations with caveats, "
     "group differences, missingness patterns, trend/seasonality, "
     "distribution problems, duplicate/identifier analysis.\n"
+    "- data_quality_score is a cheap composite (0-100) of missingness, "
+    "outliers, duplicates and mixed types — include it unless the dataset is "
+    "trivial.\n"
+    "- text_theme_extraction ONLY when a column is classified free_text "
+    "(avg_word_count > 5): it embeds the text locally and finds latent "
+    "themes.\n"
+    "- distribution_drift ONLY when the fingerprint reports a comparable "
+    "prior_report exists: it compares this file against the user's previous "
+    "report.\n"
+    "- category_harmonization suits categorical columns with 5-2000 values; "
+    "outlier_subpopulation suits numeric columns with outliers plus a "
+    "categorical column; pattern_extraction_proposal suits text columns that "
+    "may hold a repeated embedded pattern.\n"
     "- A 'custom_question' task may encode a hypothesis worth testing "
     "about specific columns; keep description concrete.\n"
     "- Keep every description and rationale under 30 words. Concise plans "
@@ -100,6 +118,15 @@ def _fallback_plan(fingerprint: dict[str, Any]) -> list[dict[str, Any]]:
     identifiers = by_kind.get("identifier", [])
     mixed = by_kind.get("mixed", [])
 
+    # Composite data-quality score goes first — it is cheap, always relevant,
+    # and gives the narrator an early headline number.
+    if cols:
+        add("data_quality_score",
+            "Compute a composite 0-100 data-quality score",
+            "One number for overall health: missingness, outliers, duplicates "
+            "and mixed types.",
+            [c["name"] for c in cols][:6])
+
     if numeric:
         add("normality", "Check which numeric columns are (not) normally distributed",
             "Normality decides which summaries and tests are trustworthy.",
@@ -122,6 +149,35 @@ def _fallback_plan(fingerprint: dict[str, Any]) -> list[dict[str, Any]]:
         add("cramer_v", "Measure categorical association strength between category columns",
             "Finds relationships between categories that bar charts hide.",
             categorical[:8])
+    # Category label harmonization — broadly applicable whenever there are
+    # categorical columns in the 5-2000 cardinality band.
+    harmonizable = [
+        c["name"] for c in cols
+        if c["kind"] == "categorical" and 5 <= (c.get("cardinality") or 0) <= 2000
+    ]
+    if harmonizable:
+        add("category_harmonization",
+            "Detect near-duplicate category labels worth merging",
+            "Merging casing/punctuation variants of the same label cleans "
+            "every downstream category chart.",
+            harmonizable[:6])
+    if numeric and categorical:
+        add("outlier_subpopulation",
+            "Check whether outliers concentrate inside one category value",
+            "A spike inside a single group is a real subpopulation, not noise.",
+            numeric[:6])
+    if free_text:
+        add("pattern_extraction_proposal",
+            "Look for a repeated embedded pattern in text columns",
+            "A consistent pattern means a filterable derived field is possible.",
+            free_text[:4])
+    prior = fingerprint.get("prior_report") or {}
+    if prior.get("exists") and prior.get("comparable"):
+        add("distribution_drift",
+            "Compare numeric distributions against the user's previous report",
+            "A shift in the same columns between uploads signals drift worth "
+            "knowing about.",
+            (prior.get("shared_numeric") or numeric)[:8])
     if numeric and categorical:
         add("group_comparison", "Break numeric columns down by category groups",
             "Surface 'which group differs from which' with post-hoc checks.",

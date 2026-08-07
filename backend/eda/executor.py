@@ -27,6 +27,7 @@ from eda.stats_core import (
     run_backbone,
 )
 from eda.classification import classify_columns
+from eda import advanced as advanced_tasks
 
 ROBUST_Z_THRESHOLD = 3.5
 
@@ -284,6 +285,15 @@ _register("mixed_type_cleanup")(_task_mixed_cleanup)
 _register("text_top_words")(_task_text_top_words)
 _register("group_comparison")(_task_group_comparison)
 _register("cardinality_sanity")(_task_cardinality_sanity)
+_register("category_harmonization")(
+    advanced_tasks.harmonize_categories)
+_register("outlier_subpopulation")(
+    advanced_tasks.outlier_subpopulations)
+_register("data_quality_score")(advanced_tasks.data_quality_score)
+_register("text_theme_extraction")(advanced_tasks.text_themes)
+_register("distribution_drift")(advanced_tasks.distribution_drift)
+_register("pattern_extraction_proposal")(
+    advanced_tasks.patterns_proposal)
 
 
 def _execute_task(
@@ -323,6 +333,15 @@ def _execute_task(
             return handler(df, task)
         if ttype in ("normality", "distribution_fit", "anova_kruskal"):
             return handler(df, task)
+        if ttype in ("category_harmonization", "text_theme_extraction",
+                     "pattern_extraction_proposal"):
+            return handler(df, classification, task)
+        if ttype == "outlier_subpopulation":
+            return handler(summary, df, classification, task)
+        if ttype == "data_quality_score":
+            return handler(summary, task)
+        if ttype == "distribution_drift":
+            return handler(summary, df, task)
         return {"skipped": True, "reason": f"Unhandled task type: {ttype}"}
     except Exception:
         return {"skipped": True,
@@ -334,9 +353,14 @@ def execute_plan(
     df: pd.DataFrame,
     classification: dict[str, dict[str, Any]],
     plan_tasks: list[dict[str, Any]],
+    prior_report: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the backbone + plan. Returns (summary, executed, skipped)."""
     summary = run_backbone(df, classification)
+    if prior_report:
+        # Private scratch key consumed by the distribution_drift task; it is
+        # stripped again below so it is never persisted into summary_json.
+        summary["_prior_report"] = prior_report
     adaptive: dict[str, Any] = {}
     executed: list[dict[str, Any]] = []
     skipped: list[dict[str, Any]] = []
@@ -363,6 +387,7 @@ def execute_plan(
             adaptive.setdefault(ttype, {}).update(result)
             executed.append(task)
 
+    summary.pop("_prior_report", None)
     summary["adaptive"] = adaptive
     summary["executed_tasks"] = [
         {"id": t["id"], "type": t["type"], "description": t["description"],
@@ -381,6 +406,7 @@ def run_pipeline_on_frame(
     plan_tasks: list[dict[str, Any]],
     overrides: dict[str, Any] | None = None,
     storage_path: str = "",
+    prior_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Build the full summary for a loaded frame.
 
@@ -399,7 +425,9 @@ def run_pipeline_on_frame(
             # Preserve cardinality/total; swap kind.
             classification[col] = {**base, "kind": kind}
 
-    summary, executed, skipped = execute_plan(df, classification, plan_tasks)
+    summary, executed, skipped = execute_plan(
+        df, classification, plan_tasks, prior_report=prior_report
+    )
 
     # Sampling provenance + exact streaming globals for sampled files.
     if loaded and not loaded.fully_loaded and loaded.streaming:

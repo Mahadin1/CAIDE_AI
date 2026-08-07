@@ -119,6 +119,52 @@ def column_type_map(prepared: PreparedFile) -> dict[str, str]:
     }
 
 
+def build_prior_context(
+    fingerprint: dict[str, Any], prior_report: dict[str, Any] | None
+) -> dict[str, Any]:
+    """Prior-report context embedded in the fingerprint for the planner.
+
+    Only the *existence* of a comparable prior report is exposed (plus the
+    shared numeric column names) so the LLM can decide to propose a
+    distribution-drift check. The full reference histograms are never sent to
+    the LLM — the executor reads them from the passed prior payload instead.
+    """
+    if not prior_report:
+        return {"exists": False, "comparable": False}
+    hist = prior_report.get("histograms") or {}
+    prior_numeric = [
+        c for c, h in hist.items()
+        if isinstance(h, dict) and h.get("bin_edges") and h.get("counts")
+    ]
+    if not prior_numeric:
+        return {"exists": True, "comparable": False, "prior_rows": None,
+                "prior_numeric": []}
+    current_numeric = {
+        c["name"] for c in fingerprint.get("columns", [])
+        if c.get("kind") == "numeric"
+    }
+    shared = [c for c in prior_numeric if c in current_numeric]
+    comparable = len(shared) / max(1, len(prior_numeric)) >= 0.5
+    return {
+        "exists": True,
+        "comparable": comparable,
+        "prior_rows": (prior_report.get("shape") or {}).get("rows"),
+        "shared_numeric": shared[:12],
+    }
+
+
+def attach_prior_context(
+    prepared: PreparedFile, prior_report: dict[str, Any] | None
+) -> PreparedFile:
+    """Mutate the prepared fingerprint with prior-report context (for plan
+    consistency between the plan preview and the worker, both must inject the
+    exact same context before planning)."""
+    prepared.fingerprint["prior_report"] = build_prior_context(
+        prepared.fingerprint, prior_report
+    )
+    return prepared
+
+
 def build_overview(prepared: PreparedFile, summary: dict[str, Any]) -> dict[str, Any]:
     """The overview block sent to the narrator alongside plan + findings."""
     return {
@@ -134,6 +180,7 @@ def execute(
     prepared: PreparedFile,
     storage_path: str,
     overrides: dict[str, Any] | None = None,
+    prior_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Deterministic half of the pipeline (blocking — call via to_thread).
 
@@ -147,6 +194,7 @@ def execute(
         plan_tasks=prepared.plan_tasks,
         overrides=overrides,
         storage_path=storage_path,
+        prior_report=prior_report,
     )
     findings = select_findings(summary)
     summary["findings"] = findings
@@ -173,9 +221,10 @@ async def execute_and_narrate(
     prepared: PreparedFile,
     storage_path: str,
     overrides: dict[str, Any] | None = None,
+    prior_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convenience wrapper for small pipelines: execute + narrate."""
-    result = execute(prepared, storage_path, overrides)
+    result = execute(prepared, storage_path, overrides, prior_report)
     result["narrative"] = await narrate_result(prepared, result)
     return result
 

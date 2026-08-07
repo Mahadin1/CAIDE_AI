@@ -526,6 +526,214 @@ def _adaptive_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _data_quality_score_finding(summary: dict[str, Any]) -> dict[str, Any] | None:
+    res = summary.get("adaptive", {}).get("data_quality_score")
+    if not res or not isinstance(res, dict) or res.get("skipped"):
+        return None
+    grade = res.get("grade", "needs_attention")
+    score = res.get("score", 0)
+    sev = {"excellent": "low", "good": "low", "fair": "medium"}.get(
+        grade, "high")
+    parts = []
+    p = res.get("penalties") or {}
+    if p.get("nulls", 0) > 0:
+        parts.append(f"nulls −{p['nulls']:.0f}")
+    if p.get("implausible_values", 0) > 0:
+        parts.append(f"implausible values −{p['implausible_values']:.0f}")
+    if p.get("duplicates", 0) > 0:
+        parts.append(f"duplicates −{p['duplicates']:.0f}")
+    if p.get("mixed_types", 0) > 0:
+        parts.append(f"mixed types −{p['mixed_types']:.0f}")
+    if p.get("constant_or_empty", 0) > 0:
+        parts.append(f"constant/empty −{p['constant_or_empty']:.0f}")
+    detail = "; ".join(parts) if parts else "no penalties applied"
+    return {
+        **_base("data_quality_score", sev, res.get("method", "")),
+        "evidence": {
+            "score": score, "grade": grade,
+            "components": res.get("components"),
+            "penalties": p,
+        },
+        "interpretation": (
+            f"Overall data quality is {grade.replace('_', ' ')} "
+            f"(score {score}/100). Penalty breakdown: {detail}."
+        ),
+        "action": (
+            "Start with the biggest penalty: address that issue first, then "
+            "re-run the analysis."
+        ),
+        "message": f"Data quality score: {score}/100 ({grade.replace('_', ' ')}).",
+    }
+
+
+def _new_adaptive_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Findings from the six newer adaptive tasks (advanced.py)."""
+    out: list[dict[str, Any]] = []
+    adaptive = summary.get("adaptive", {})
+
+    for col, res in (adaptive.get("category_harmonization") or {}).items():
+        if not isinstance(res, dict):
+            continue
+        merges = res.get("example_merges") or []
+        if not merges:
+            continue
+        m = merges[0]
+        variants = ", ".join(f"'{v}'" for v in m.get("variants", [])[:2])
+        out.append({
+            **_base("category_harmonization", "medium",
+                    res.get("method", "Fuzzy label clustering.")),
+            "column": col,
+            "evidence": {
+                "original_unique": res.get("original_unique"),
+                "merged_unique": res.get("merged_unique"),
+                "reduction_pct": res.get("reduction_pct"),
+                "threshold_pct": res.get("reduction_margin_threshold_pct"),
+                "example_merges": merges,
+            },
+            "interpretation": (
+                f"'{col}' has {res.get('original_unique')} distinct values, "
+                f"but {res.get('merged_unique')} of them look like "
+                f"near-duplicates of each other. Merging would cut the unique "
+                f"count by {_f(res.get('reduction_pct'), 1)}% — e.g. "
+                f"'{m.get('canonical')}' also appears as {variants}."
+            ),
+            "action": (
+                "Confirm the merge groups, then standardize the labels in your "
+                "source so categories count consistently."
+            ),
+            "message": f"'{col}' has near-duplicate category labels ({_f(res.get('reduction_pct'), 1)}% reducible).",
+        })
+
+    for key, res in (adaptive.get("outlier_subpopulation") or {}).items():
+        if not isinstance(res, dict):
+            continue
+        out.append({
+            **_base("outlier_subpopulation",
+                    "high" if (res.get("ratio") or 0) > 5 else "medium",
+                    res.get("method", "Outlier concentration vs baseline rate.")),
+            "column": f"{res.get('numeric_column')} · {res.get('category_column')}",
+            "evidence": {
+                "numeric_column": res.get("numeric_column"),
+                "category_column": res.get("category_column"),
+                "value": res.get("value"),
+                "subgroup_count": res.get("subgroup_count"),
+                "subgroup_outlier_count": res.get("subgroup_outlier_count"),
+                "subgroup_outlier_rate": res.get("subgroup_outlier_rate"),
+                "baseline_outlier_rate": res.get("baseline_outlier_rate"),
+                "ratio": res.get("ratio"),
+                "significance_bound": res.get("significance_bound"),
+            },
+            "interpretation": (
+                f"Outliers in '{res.get('numeric_column')}' are heavily "
+                f"concentrated in '{res.get('category_column')}' = "
+                f"'{res.get('value')}': {res.get('subgroup_outlier_count')} of "
+                f"{res.get('subgroup_count')} rows in that group are outliers "
+                f"({_pct(res.get('subgroup_outlier_rate'))}), vs a baseline of "
+                f"{_pct(res.get('baseline_outlier_rate'))} — a "
+                f"{res.get('ratio')}× concentration."
+            ),
+            "action": (
+                "Investigate what is different about that subgroup — the "
+                "outliers may be a real subpopulation rather than data errors."
+            ),
+            "message": f"'{res.get('numeric_column')}' outliers concentrate in '{res.get('value')}' ({res.get('ratio')}× baseline).",
+        })
+
+    drift = adaptive.get("distribution_drift") or {}
+    if isinstance(drift, dict) and not drift.get("skipped"):
+        for col, res in drift.items():
+            if not isinstance(res, dict):
+                continue
+            out.append({
+                **_base("distribution_drift", "medium",
+                        "PSI (population stability index) vs prior report."),
+                "column": col,
+                "evidence": {
+                    "psi": res.get("psi"),
+                    "threshold": res.get("threshold"),
+                    "prior_rows": res.get("prior_rows"),
+                    "current_rows": res.get("current_rows"),
+                    "mean_shift": res.get("mean_shift"),
+                    "prior_mean": res.get("prior_mean"),
+                    "current_mean": res.get("current_mean"),
+                },
+                "interpretation": (
+                    f"'{col}' has drifted materially (PSI = {_f(res.get('psi'))} "
+                    f"> {res.get('threshold')}) compared to your most recent "
+                    f"analysis ({res.get('prior_rows')} rows then vs "
+                    f"{res.get('current_rows')} now). "
+                    + (f"Mean moved from {_f(res.get('prior_mean'))} to "
+                       f"{_f(res.get('current_mean'))}."
+                       if res.get("mean_shift") is not None else "")
+                ),
+                "action": (
+                    "Treat this file as a distributional change, not a "
+                    "re-run — re-validate any model or threshold built on the "
+                    "previous dataset."
+                ),
+                "message": f"'{col}' shows distributional drift vs your prior analysis (PSI {_f(res.get('psi'))}).",
+            })
+
+    for col, res in (adaptive.get("pattern_extraction_proposal") or {}).items():
+        if not isinstance(res, dict):
+            continue
+        out.append({
+            **_base("pattern_extraction_proposal", "low",
+                    "Regex pattern-match rate across non-null text values."),
+            "column": col,
+            "evidence": {
+                "pattern": res.get("pattern"),
+                "match_rate": res.get("match_rate"),
+                "threshold": res.get("match_rate_threshold"),
+                "derived_field_proposal": res.get("derived_field_proposal"),
+                "example_matches": res.get("example_matches"),
+            },
+            "interpretation": (
+                f"{_pct(res.get('match_rate'))} of '{col}' values follow one "
+                f"consistent pattern ('{res.get('pattern')}'). Extracting "
+                f"'{res.get('derived_field_proposal')}' would let you filter, "
+                "group or chart on that field directly."
+            ),
+            "action": (
+                "Extract the derived field if you need to analyze that "
+                "component separately — this is a proposal, nothing was changed."
+            ),
+            "message": f"'{col}' contains a consistent '{res.get('pattern')}' pattern ({_pct(res.get('match_rate'))} match).",
+        })
+
+    for col, res in (adaptive.get("text_theme_extraction") or {}).items():
+        if not isinstance(res, dict) or res.get("skipped"):
+            continue
+        top_theme = (res.get("themes") or [{}])[0]
+        examples = top_theme.get("examples") or []
+        anchor = examples[0]["text"] if examples else ""
+        out.append({
+            **_base("text_theme_extraction", "medium",
+                    res.get("method", "Local embeddings + PCA.")),
+            "column": col,
+            "evidence": {
+                "texts_embedded": res.get("texts_embedded"),
+                "components": res.get("components"),
+                "explained_variance": res.get("explained_variance"),
+                "cumulative_explained_variance": res.get("cumulative_explained_variance"),
+            },
+            "interpretation": (
+                f"'{col}' clusters into {res.get('components')} latent themes "
+                f"explaining "
+                f"{_pct(res.get('cumulative_explained_variance'))} of the "
+                "text's variance (measured, not assumed). A representative "
+                f"text is: \"{anchor[:120]}\""
+            ),
+            "action": (
+                "If the themes map to real business categories, add them as a "
+                "derived label — or just use them to skim what this column is "
+                "about."
+            ),
+            "message": f"'{col}' has {res.get('components')} latent themes ({_pct(res.get('cumulative_explained_variance'))} variance explained).",
+        })
+    return out
+
+
 def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Assemble all deterministic findings for a summary."""
     findings: list[dict[str, Any]] = []
@@ -546,6 +754,10 @@ def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
             "message": f"{dup_count} duplicate rows detected ({dup_share:.1f}%).",
         })
 
+    dq = _data_quality_score_finding(summary)
+    if dq:
+        findings.append(dq)
+
     findings += _column_findings(summary)
     findings += _missing_findings(summary)
     findings += _correlation_findings(summary)
@@ -555,6 +767,7 @@ def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     findings += _group_findings(summary)
     findings += _trend_findings(summary)
     findings += _adaptive_findings(summary)
+    findings += _new_adaptive_findings(summary)
 
     if not summary.get("correlations") and not summary.get("numeric_stats"):
         findings.append({

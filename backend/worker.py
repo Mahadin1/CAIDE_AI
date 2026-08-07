@@ -197,6 +197,15 @@ class Worker:
 
             db_ops.set_upload_stage(client, upload_id, "planning",
                                     "Designing the analysis plan…", 40)
+            # Prior-report context must be attached before planning so the
+            # plan cache key matches the plan preview (same injection).
+            prior_report = await asyncio.to_thread(
+                db_ops.get_most_recent_report,
+                client, upload["user_id"], exclude_upload_id=upload_id,
+            )
+            await asyncio.to_thread(
+                agent.attach_prior_context, prepared, prior_report
+            )
             await agent.plan_file(prepared, overrides)
             db_ops.set_upload_meta(
                 client, upload_id,
@@ -210,7 +219,7 @@ class Worker:
             db_ops.set_upload_stage(client, upload_id, "computing",
                                     "Computing statistics and running tests…", 70)
             result = await asyncio.to_thread(
-                agent.execute, prepared, storage_path, overrides
+                agent.execute, prepared, storage_path, overrides, prior_report
             )
 
             db_ops.set_upload_stage(client, upload_id, "narrating",

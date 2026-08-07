@@ -5,6 +5,7 @@ by user_id — never trust the caller to stay inside their own rows.
 """
 from __future__ import annotations
 
+import logging
 import math
 from datetime import datetime, timezone
 from typing import Any
@@ -14,6 +15,8 @@ import pandas as pd
 from supabase import Client, create_client
 
 from config import settings
+
+logger = logging.getLogger("datascope.db")
 
 
 def get_client() -> Client:
@@ -60,6 +63,20 @@ def increment_reports_used(client: Client, user_id: str) -> None:
     client.rpc("increment_reports_used", {"uid": user_id}).execute()
 
 
+def decrement_credit(client: Client, user_id: str) -> None:
+    """Consume one credit after a successful report (no-op at zero)."""
+    try:
+        client.rpc("decrement_credit", {"uid": user_id}).execute()
+    except Exception:  # noqa: BLE001
+        logger.warning("decrement_credit failed for user=%s", user_id)
+
+
+def set_credits(client: Client, user_id: str, credits: int) -> None:
+    client.table("profiles").update({"credits": int(credits)}).eq(
+        "id", user_id
+    ).execute()
+
+
 # ---------------------------------------------------------------------------
 # uploads
 # ---------------------------------------------------------------------------
@@ -93,6 +110,39 @@ def insert_upload(
         )
         .execute()
     )
+    return res.data[0]
+
+
+def insert_upload_file(
+    client: Client,
+    upload_id: str,
+    user_id: str,
+    filename: str,
+    storage_path: str,
+    file_size_bytes: int | None = None,
+    source_format: str | None = None,
+) -> dict[str, Any]:
+    """Create an upload row for a file that has been saved but not analyzed.
+
+    status='ready' is the "file in the Files section" state — it is never
+    auto-queued; the user opens the file and chooses what to do with it.
+    """
+    payload: dict[str, Any] = {
+        "id": upload_id,
+        "user_id": user_id,
+        "filename": filename,
+        "storage_path": storage_path,
+        "status": "ready",
+        "stage": "saved",
+        "stage_label": "Saved — not analyzed yet",
+        "progress": 5,
+        "attempts": 0,
+    }
+    if file_size_bytes is not None:
+        payload["file_size_bytes"] = int(file_size_bytes)
+    if source_format:
+        payload["source_format"] = source_format
+    res = client.table("uploads").insert(payload).execute()
     return res.data[0]
 
 
@@ -267,6 +317,37 @@ def get_report_with_upload(client: Client, report_id: str) -> dict[str, Any] | N
         .execute()
     )
     return _single_result(res)
+
+
+def get_most_recent_report(
+    client: Client, user_id: str, exclude_upload_id: str | None = None
+) -> dict[str, Any] | None:
+    """The user's most recent finished report, for distribution-drift context.
+
+    Returns only the fields the drift analysis needs (histograms, numeric
+    stats, shape) plus the created_at date, so we never drag the full report
+    blob across the network.
+    """
+    q = (
+        client.table("reports")
+        .select("id, created_at, summary_json, uploads!inner(user_id)")
+        .eq("uploads.user_id", user_id)
+    )
+    if exclude_upload_id:
+        q = q.neq("uploads.id", exclude_upload_id)
+    res = q.order("created_at", desc=True).limit(1).execute()
+    rows = res.data
+    if not rows:
+        return None
+    row = rows[0]
+    summary = row.get("summary_json") or {}
+    return {
+        "id": row["id"],
+        "created_at": row.get("created_at"),
+        "histograms": summary.get("histograms") or {},
+        "numeric_stats": summary.get("numeric_stats") or {},
+        "shape": summary.get("shape") or {},
+    }
 
 
 def set_report_export_urls(

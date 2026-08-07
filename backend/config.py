@@ -28,12 +28,31 @@ class Settings:
         self.openrouter_api_key: str = os.getenv("OPENROUTER_API_KEY", "")
         self.paddle_api_key: str = os.getenv("PADDLE_API_KEY", "")
         self.paddle_webhook_secret: str = os.getenv("PADDLE_WEBHOOK_SECRET", "")
+        # Paddle price ids per plan (3 paid tiers + free). Used to map a
+        # subscription event's price back to a plan; unknown ids fall back to
+        # the pro price id, then to 'pro'.
+        self.paddle_starter_price_id: str = os.getenv(
+            "PADDLE_STARTER_PRICE_ID", ""
+        )
+        self.paddle_pro_price_id: str = os.getenv("PADDLE_PRO_PRICE_ID", "")
+        self.paddle_scale_price_id: str = os.getenv(
+            "PADDLE_SCALE_PRICE_ID", ""
+        )
         # Optional model override; default to a free OpenRouter endpoint.
         self.openrouter_model: str = os.getenv(
             "OPENROUTER_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"
         )
         # Monthly report limit for free tier users.
         self.free_monthly_limit: int = int(os.getenv("FREE_MONTHLY_LIMIT", "2"))
+        # Monthly credit allowance per plan. One credit = one analysis job.
+        # Plans are deliberately *not* unlimited: credits are the revenue unit.
+        self.plan_monthly_credits: dict[str, int] = {
+            "free": int(os.getenv("FREE_MONTHLY_CREDITS", "3")),
+            "starter": int(os.getenv("STARTER_MONTHLY_CREDITS", "30")),
+            "pro": int(os.getenv("PRO_MONTHLY_CREDITS", "100")),
+            "scale": int(os.getenv("SCALE_MONTHLY_CREDITS", "300")),
+        }
+        self.default_plan: str = "free"
         # --- adaptive EDA platform knobs (see docs/ARCHITECTURE.md) ---
         # Rows/columns at or below which the full file is analyzed exactly.
         self.max_rows_full: int = int(os.getenv("MAX_ROWS_FULL", "1000000"))
@@ -55,6 +74,21 @@ class Settings:
             self.supabase_url
             and self.supabase_service_key
         )
+
+    def plan_for_price_id(self, price_id: str | None) -> str:
+        """Map a Paddle price id to a plan name (best-effort)."""
+        if not price_id:
+            return self.default_plan
+        if price_id == self.paddle_starter_price_id:
+            return "starter"
+        if price_id == self.paddle_scale_price_id:
+            return "scale"
+        if price_id == self.paddle_pro_price_id:
+            return "pro"
+        return "pro"  # legacy single-price behaviour
+
+    def credits_for_plan(self, plan: str | None) -> int:
+        return int(self.plan_monthly_credits.get(plan or self.default_plan, 0))
 
 
 settings = Settings()

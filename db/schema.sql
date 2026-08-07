@@ -14,7 +14,8 @@ create table if not exists public.profiles (
   id uuid primary key references auth.users(id) on delete cascade,
   email text not null,
   name text,
-  plan text not null default 'free' check (plan in ('free', 'pro')),
+  plan text not null default 'free' check (plan in ('free', 'starter', 'pro', 'scale')),
+  credits int not null default 0,
   reports_this_month int not null default 0,
   created_at timestamptz not null default now()
 );
@@ -28,7 +29,7 @@ create table if not exists public.uploads (
   user_id uuid references public.profiles(id) on delete cascade not null,
   filename text not null,
   storage_path text not null,
-  status text not null default 'pending' check (status in ('pending', 'processing', 'done', 'failed')),
+  status text not null default 'pending' check (status in ('pending', 'ready', 'processing', 'done', 'failed')),
   -- job orchestration / progress
   stage text not null default 'queued',
   stage_label text,
@@ -175,12 +176,13 @@ language plpgsql
 security definer set search_path = public
 as $$
 begin
-  insert into public.profiles (id, email, name, plan, reports_this_month)
+  insert into public.profiles (id, email, name, plan, credits, reports_this_month)
   values (
     new.id,
     coalesce(new.email, ''),
     nullif(new.raw_user_meta_data ->> 'name', ''),
     'free',
+    3,
     0
   )
   on conflict (id) do nothing;
@@ -212,25 +214,74 @@ end;
 $$;
 
 -- ============================================================
--- Monthly usage reset (called by cron / scheduled function)
+-- Credits: one analysis consumes one credit. Never below zero.
 -- ============================================================
-create or replace function public.reset_monthly_usage()
+create or replace function public.decrement_credit(uid uuid)
 returns void
 language plpgsql
 security definer set search_path = public
 as $$
 begin
   update public.profiles
-  set reports_this_month = 0;
+  set credits = greatest(credits - 1, 0)
+  where id = uid;
 end;
 $$;
+
+-- ============================================================
+-- Monthly credit reset (called by cron / scheduled function)
+-- ============================================================
+create or replace function public.reset_monthly_credits()
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+  set credits = case plan
+        when 'free' then 3
+        when 'starter' then 30
+        when 'pro' then 100
+        when 'scale' then 300
+        else 0
+      end,
+      reports_this_month = 0;
+end;
+$$;
+
+-- ============================================================
+-- Plan & credits migration for existing databases.
+-- The CREATE TABLE above only applies to fresh databases; existing rows and
+-- CHECK constraints were created with the old (free, pro) plan list and no
+-- credits column, so migrate them explicitly. Idempotent.
+-- ============================================================
+alter table public.profiles drop constraint if exists profiles_plan_check;
+alter table public.profiles
+  add constraint profiles_plan_check check (plan in ('free', 'starter', 'pro', 'scale'));
+
+alter table public.uploads drop constraint if exists uploads_status_check;
+alter table public.uploads
+  add constraint uploads_status_check
+  check (status in ('pending', 'ready', 'processing', 'done', 'failed'));
+
+alter table public.profiles add column if not exists credits int not null default 0;
+
+-- Backfill credits for users who existed before credits existed.
+update public.profiles
+set credits = case plan
+      when 'free' then 3
+      when 'starter' then 30
+      when 'pro' then 100
+      when 'scale' then 300
+      else 0
+    end
+where credits = 0;
 
 -- ============================================================
 -- Idempotent upgrades for databases created before the adaptive
 -- platform redesign. Safe to run; no-ops when columns exist.
 -- ============================================================
-alter table public.uploads add column if not exists stage text not null default 'queued';
-alter table public.uploads add column if not exists stage_label text;
+alter table public.uploads add column if not exists stage text not null default 'queued';alter table public.uploads add column if not exists stage_label text;
 alter table public.uploads add column if not exists progress int not null default 5;
 alter table public.uploads add column if not exists attempts int not null default 0;
 alter table public.uploads add column if not exists error_message text;
