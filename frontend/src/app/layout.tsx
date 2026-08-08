@@ -17,6 +17,13 @@ export default function RootLayout({
 }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="en" className={`${GeistSans.variable} ${GeistMono.variable}`}>
+      <head>
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `(function(){try{var t=localStorage.getItem('datascope-theme');if(t==='light'||(!t&&window.matchMedia('(prefers-color-scheme: light)').matches&&localStorage.getItem('datascope-theme-set')!=='dark')){document.documentElement.classList.add('light');}}catch(e){}})();`,
+          }}
+        />
+      </head>
       <body className="font-sans antialiased">
         {children}
       </body>

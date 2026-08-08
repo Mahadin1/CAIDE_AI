@@ -52,10 +52,10 @@ export function RowDrilldown({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-[#1f1f1f] bg-[#0a0a0a]"
+        className="flex max-h-[85vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border bg-surface"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between gap-4 border-b border-[#1f1f1f] px-5 py-4">
+        <div className="flex items-center justify-between gap-4 border-b border-border px-5 py-4">
           <div className="flex min-w-0 items-center gap-3">
             <Table2 className="h-4 w-4 shrink-0 text-muted" />
             <div className="min-w-0">
@@ -68,7 +68,7 @@ export function RowDrilldown({
           </div>
           <button
             onClick={onClose}
-            className="rounded-md p-1 text-muted transition-colors hover:bg-[#111111] hover:text-foreground"
+            className="rounded-md p-1 text-muted transition-colors hover:bg-elevated hover:text-foreground"
             aria-label="Close"
           >
             <X className="h-5 w-5" />
@@ -80,7 +80,7 @@ export function RowDrilldown({
             <div className="p-8 text-center text-sm text-[#f87171]">{error}</div>
           ) : !data ? (
             <div className="flex flex-col items-center gap-2 p-8 text-sm text-muted">
-              <Loader2 className="h-5 w-5 animate-spin text-[#fafafa]" />
+              <Loader2 className="h-5 w-5 animate-spin text-foreground" />
               Loading rows…
             </div>
           ) : rows.length === 0 ? (
@@ -89,12 +89,12 @@ export function RowDrilldown({
             </div>
           ) : (
             <table className="w-full border-collapse text-left text-sm">
-              <thead className="sticky top-0 bg-[#111111]">
+              <thead className="sticky top-0 bg-elevated">
                 <tr>
                   {columns.map((c) => (
                     <th
                       key={c}
-                      className="whitespace-nowrap border-b border-[#1f1f1f] px-4 py-2 text-xs font-medium text-muted"
+                      className="whitespace-nowrap border-b border-border px-4 py-2 text-xs font-medium text-muted"
                     >
                       {c}
                     </th>
@@ -103,7 +103,7 @@ export function RowDrilldown({
               </thead>
               <tbody>
                 {rows.map((row, i) => (
-                  <tr key={i} className="border-b border-[#1f1f1f]/60 last:border-0">
+                  <tr key={i} className="border-b border-border/60 last:border-0">
                     {columns.map((c) => (
                       <td key={c} className="whitespace-nowrap px-4 py-1.5">
                         {row[c] === null || row[c] === undefined ? (
@@ -120,7 +120,7 @@ export function RowDrilldown({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-[#1f1f1f] px-5 py-3">
+        <div className="flex items-center justify-between border-t border-border px-5 py-3">
           <Badge variant="secondary">
             {data ? `${data.count} row${data.count === 1 ? "" : "s"}` : "…"}
           </Badge>

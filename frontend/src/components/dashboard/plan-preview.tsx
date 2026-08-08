@@ -86,7 +86,7 @@ export function PlanPreview({
 
       {/* Sample notice */}
       {isSample && moe != null && (
-        <div className="rounded-md border border-[#1f1f1f] bg-[#111111] p-4">
+        <div className="rounded-md border border-border bg-elevated p-4">
           <p className="text-sm text-foreground">
             Large file — the deep analyses will run on a deterministic sample
             of {plan.overview.sample_info.sample_rows.toLocaleString()} of{" "}
@@ -102,13 +102,13 @@ export function PlanPreview({
       {/* Planned checks */}
       <div className="card-panel p-4">
         <div className="mb-3 flex items-center gap-2">
-          <Brain className="h-4 w-4 text-[#fafafa]" />
+          <Brain className="h-4 w-4 text-foreground" />
           <h3 className="text-sm font-medium">Planned checks</h3>
         </div>
         <ul className="space-y-2">
           {plan.plan.tasks.map((task) => (
             <li key={task.id} className="flex items-start gap-2 text-sm">
-              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-[#fafafa]" />
+              <span className="mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full bg-accent" />
               <div>
                 <span className="text-foreground">{task.description}</span>
                 {task.rationale && (
@@ -127,7 +127,7 @@ export function PlanPreview({
           {columns.map((col) => (
             <div
               key={col}
-              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-[#1f1f1f] bg-[#111111] px-3 py-2"
+              className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-border bg-elevated px-3 py-2"
             >
               <label className="flex min-w-0 items-center gap-2 text-sm">
                 <input
@@ -139,7 +139,7 @@ export function PlanPreview({
                     else next.delete(col);
                     setExcluded(next);
                   }}
-                  className="h-3.5 w-3.5 accent-[#fafafa]"
+                  className="h-3.5 w-3.5 accent-accent"
                 />
                 <span
                   className={
@@ -160,7 +160,7 @@ export function PlanPreview({
                     [col]: e.target.value as ColumnKind,
                   }))
                 }
-                className="rounded-md border border-[#1f1f1f] bg-[#111111] px-2 py-1 text-xs text-foreground focus:border-[#fafafa] focus:outline-none disabled:opacity-50"
+                className="rounded-md border border-border bg-elevated px-2 py-1 text-xs text-foreground focus:border-accent focus:outline-none disabled:opacity-50"
               >
                 {KIND_OPTIONS.map((k) => (
                   <option key={k} value={k}>

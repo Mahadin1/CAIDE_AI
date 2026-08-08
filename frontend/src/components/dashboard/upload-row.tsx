@@ -22,11 +22,12 @@ import type { JobStatus, Upload } from "@/lib/types";
 
 const statusMeta: Record<
   Upload["status"],
-  { label: string; variant: "success" | "info" | "warning" | "danger" }
+  { label: string; variant: "success" | "info" | "warning" | "danger" | "secondary" }
 > = {
   done: { label: "Ready", variant: "success" },
   processing: { label: "Analyzing", variant: "info" },
   pending: { label: "Pending", variant: "warning" },
+  ready: { label: "Saved", variant: "secondary" },
   failed: { label: "Failed", variant: "danger" },
 };
 
@@ -130,7 +131,7 @@ export function UploadRow({
     >
       <div className="flex min-w-0 items-center gap-3">
         {busy ? (
-          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-[#fafafa]" />
+          <Loader2 className="h-5 w-5 shrink-0 animate-spin text-foreground" />
         ) : (
           <FileText className="h-5 w-5 shrink-0 text-muted" />
         )}
@@ -140,7 +141,7 @@ export function UploadRow({
             <RelativeTime date={upload.created_at} />
           </p>
           {busy && stageLabel && (
-            <p className="mt-0.5 text-xs text-[#fafafa]">
+            <p className="mt-0.5 text-xs text-foreground">
               {stageLabel}
               {typeof progress === "number" && ` · ${progress}%`}
             </p>
@@ -182,7 +183,7 @@ export function UploadRow({
         {status === "done" && reportId && (
           <Link
             href={`/dashboard/reports/${reportId}`}
-            className="inline-flex items-center gap-1 text-sm font-medium text-[#fafafa] hover:underline"
+            className="inline-flex items-center gap-1 text-sm font-medium text-foreground hover:underline"
           >
             View report <ArrowRight className="h-4 w-4" />
           </Link>

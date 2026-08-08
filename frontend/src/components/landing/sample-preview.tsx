@@ -27,7 +27,7 @@ export function SampleReportPreview() {
     <div className="card-panel w-full max-w-md p-6 shadow-2xl">
       <div className="flex items-center justify-between">
         <p className="font-heading text-sm font-medium">customers_march.csv</p>
-        <span className="rounded-full bg-[#1a1a1a] px-2.5 py-0.5 text-xs text-[#fafafa]">
+        <span className="rounded-full bg-elevated px-2.5 py-0.5 text-xs text-foreground">
           Ready
         </span>
       </div>
@@ -43,7 +43,7 @@ export function SampleReportPreview() {
         </ResponsiveContainer>
       </div>
 
-      <div className="mt-5 space-y-3 border-t border-[#1f1f1f] pt-4 text-sm">
+      <div className="mt-5 space-y-3 border-t border-border pt-4 text-sm">
         <p className="text-muted">
           <span className="text-foreground">34% of emails are missing</span> — this
           column should be cleaned before any outreach use.

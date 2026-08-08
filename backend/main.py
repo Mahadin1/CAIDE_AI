@@ -151,11 +151,12 @@ def _check_quota(client, user_id: str) -> None:
 
 
 def _check_pro(client, user_id: str) -> None:
+    """Exports and drill-down require a paid plan (any tier)."""
     profile = db_ops.get_profile(client, user_id)
-    if profile is None or profile.get("plan") != "pro":
+    if profile is None or profile.get("plan") == "free":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="This feature requires a Pro subscription",
+            detail="This feature requires a paid plan (Starter, Pro or Scale)",
         )
 
 

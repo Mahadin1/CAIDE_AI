@@ -26,8 +26,8 @@ function formatDate(iso: string): string {
 const severityStyles: Record<string, string> = {
   high: "border-[#3a1a1a] bg-[#1a0a0a]",
   medium: "border-[#3a3320] bg-[#1a160c]",
-  low: "border-[#1f1f1f] bg-[#111111]",
-  info: "border-[#1f1f1f] bg-[#111111]",
+  low: "border-border bg-elevated",
+  info: "border-border bg-elevated",
 };
 
 export default async function ReportPage({
@@ -58,7 +58,7 @@ export default async function ReportPage({
     .select("plan")
     .single<Pick<Profile, "plan">>();
 
-  const isPro = profile?.plan === "pro";
+  const isPro = profile?.plan !== "free";
   const summary = report.summary_json;
   const sample = report.sample_info_json;
   const findings = summary.findings ?? [];
@@ -125,7 +125,7 @@ export default async function ReportPage({
 
       {/* Sample notice */}
       {sample && sample.mode === "sample" && (
-        <div className="rounded-md border border-[#1f1f1f] bg-[#111111] p-4">
+        <div className="rounded-md border border-border bg-elevated p-4">
           <p className="text-sm text-foreground">
             Analyzed on a deterministic sample of{" "}
             {sample.sample_rows.toLocaleString()} of{" "}
@@ -179,7 +179,7 @@ export default async function ReportPage({
                   </div>
                   {f.detail && <p className="mt-1 text-xs text-muted">{f.detail}</p>}
                   {f.action && (
-                    <p className="mt-1 text-xs text-[#fafafa]">Suggested: {f.action}</p>
+                    <p className="mt-1 text-xs text-foreground">Suggested: {f.action}</p>
                   )}
                 </div>
               ))}
@@ -206,7 +206,7 @@ export default async function ReportPage({
             return (
               <div
                 key={col}
-                className="flex items-center gap-2 rounded-md border border-[#1f1f1f] bg-[#111111] px-3 py-1.5"
+                className="flex items-center gap-2 rounded-md border border-border bg-elevated px-3 py-1.5"
               >
                 <span className="text-sm text-foreground">{col}</span>
                 <span className="text-xs text-muted">{label}</span>

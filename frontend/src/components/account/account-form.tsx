@@ -122,7 +122,7 @@ export function AccountForm({ email }: { email: string }) {
             </div>
             {pwError && <p className="text-sm text-[#f87171]">{pwError}</p>}
             {pwSuccess && (
-              <p className="text-sm text-[#fafafa]">Password updated.</p>
+              <p className="text-sm text-foreground">Password updated.</p>
             )}
             <Button type="submit" disabled={pwLoading}>
               {pwLoading && <Loader2 className="h-4 w-4 animate-spin" />}

@@ -1,10 +1,11 @@
-export type UploadStatus = "pending" | "processing" | "done" | "failed";
-export type Plan = "free" | "pro";
+export type UploadStatus = "pending" | "ready" | "processing" | "done" | "failed";
+export type Plan = "free" | "starter" | "pro" | "scale";
 export interface Profile {
   id: string;
   email: string;
   name: string | null;
   plan: Plan;
+  credits: number;
   reports_this_month: number;
   created_at: string;
 }
@@ -30,6 +31,7 @@ export interface Upload {
   stage_label?: string | null;
   progress?: number | null;
   error_message?: string | null;
+  file_size_bytes?: number | null;
   source_format?: string | null;
   detected_encoding?: string | null;
   analysis_mode?: "full" | "sample" | "truncated" | null;

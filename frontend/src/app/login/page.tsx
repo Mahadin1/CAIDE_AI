@@ -118,7 +118,7 @@ export default function LoginPage() {
   };
 
   return (
-    <div className="flex min-h-screen flex-col items-center justify-center bg-[#000000] px-6">
+    <div className="flex min-h-screen flex-col items-center justify-center bg-background px-6">
       <div className="w-full max-w-sm">
         <div className="flex justify-center">
           <Logo />
@@ -134,7 +134,7 @@ export default function LoginPage() {
           </p>
 
           {/* Mode switch */}
-          <div className="mt-6 grid grid-cols-2 gap-1 rounded-md border border-[#1f1f1f] bg-[#0a0a0a] p-1">
+          <div className="mt-6 grid grid-cols-2 gap-1 rounded-md border border-border bg-surface p-1">
             {(["signin", "signup"] as Mode[]).map((m) => (
               <button
                 key={m}
@@ -142,7 +142,7 @@ export default function LoginPage() {
                 onClick={() => switchMode(m)}
                 className={`rounded px-3 py-1.5 text-sm transition-colors ${
                   mode === m
-                    ? "bg-[#111111] text-foreground"
+                    ? "bg-elevated text-foreground"
                     : "text-muted hover:text-foreground"
                 }`}
               >
@@ -204,13 +204,13 @@ export default function LoginPage() {
             <p className="mt-4 text-center text-sm text-[#f87171]">{error}</p>
           )}
           {success && (
-            <p className="mt-4 text-center text-sm text-[#fafafa]">{success}</p>
+            <p className="mt-4 text-center text-sm text-foreground">{success}</p>
           )}
 
           <div className="my-6 flex items-center gap-3">
-            <div className="h-px flex-1 bg-[#1f1f1f]" />
+            <div className="h-px flex-1 bg-border" />
             <span className="text-xs text-muted">or</span>
-            <div className="h-px flex-1 bg-[#1f1f1f]" />
+            <div className="h-px flex-1 bg-border" />
           </div>
 
           <Button

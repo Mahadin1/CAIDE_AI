@@ -18,7 +18,7 @@ const steps = [
 
 export function HowItWorks() {
   return (
-    <section id="how-it-works" className="section-padding border-t border-[#1f1f1f]">
+    <section id="how-it-works" className="section-padding border-t border-border">
       <div className="container-page">
         <p className="text-sm font-medium uppercase tracking-widest text-muted">
           How it works

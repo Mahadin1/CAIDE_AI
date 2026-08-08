@@ -252,9 +252,9 @@ class Worker:
             db_ops.mark_upload_done(client, upload_id)
 
             try:
-                db_ops.increment_reports_used(client, upload["user_id"])
+                db_ops.decrement_credit(client, upload["user_id"])
             except Exception:  # noqa: BLE001
-                logger.warning("failed to increment usage for user=%s",
+                logger.warning("failed to decrement credit for user=%s",
                                upload["user_id"])
 
             logger.info("analysis done upload=%s report=%s", upload_id,

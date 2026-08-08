@@ -153,8 +153,15 @@ async def paddle_webhook(request: Request) -> Response:
     subscription_id = data.get("id")
     new_status = _status_from_event(event_type, data)
 
+    items = data.get("items") or []
+    price_id = None
+    for item in items:
+        price = item.get("price") or {}
+        price_id = price.get("id") or price_id
+    plan = settings.plan_for_price_id(price_id) if new_status == "active" else "free"
+
     upsert_subscription(client, user_id, subscription_id, new_status)
-    set_plan(client, user_id, "pro" if new_status == "active" else "free")
+    set_plan(client, user_id, plan)
 
     if new_status in ("cancelled", "inactive") and subscription_id:
         # The event references a (possibly different) subscription id; make

@@ -8,11 +8,13 @@ const config: Config = {
       colors: {
         background: "hsl(var(--background) / <alpha-value>)",
         surface: "hsl(var(--surface) / <alpha-value>)",
+        elevated: "hsl(var(--elevated) / <alpha-value>)",
         foreground: "hsl(var(--foreground) / <alpha-value>)",
         muted: "hsl(var(--muted) / <alpha-value>)",
         border: "hsl(var(--border) / <alpha-value>)",
         accent: {
           DEFAULT: "hsl(var(--accent) / <alpha-value>)",
+          strong: "hsl(var(--accent-strong) / <alpha-value>)",
           foreground: "hsl(var(--accent-foreground) / <alpha-value>)",
         },
       },

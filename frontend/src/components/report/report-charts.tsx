@@ -651,7 +651,7 @@ export function ReportCharts({ summary, reportId }: { summary: Summary; reportId
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <div className="flex h-40 items-center justify-center rounded border border-dashed border-[#1f1f1f]">
+            <div className="flex h-40 items-center justify-center rounded border border-dashed border-border">
               <p className="text-sm text-muted">Charts appear here when something is flagged</p>
             </div>
           </CardContent>

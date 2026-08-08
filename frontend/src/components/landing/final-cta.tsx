@@ -4,7 +4,7 @@ import { Button } from "@/components/ui/button";
 
 export function FinalCta() {
   return (
-    <section className="section-padding border-t border-[#1f1f1f]">
+    <section className="section-padding border-t border-border">
       <div className="container-page">
         <div className="card-panel flex flex-col items-center px-6 py-16 text-center md:py-20">
           <h2 className="max-w-2xl text-3xl font-medium md:text-4xl">

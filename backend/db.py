@@ -398,7 +398,12 @@ def upsert_subscription(
 
 
 def set_plan(client: Client, user_id: str, plan: str) -> None:
-    client.table("profiles").update({"plan": plan}).eq("id", user_id).execute()
+    """Update the plan and immediately grant the plan's full credit
+    allowance (monthly credits are per-plan and reset on any change)."""
+    credits = settings.credits_for_plan(plan)
+    client.table("profiles").update(
+        {"plan": plan, "credits": credits}
+    ).eq("id", user_id).execute()
 
 
 def set_plan_by_subscription(

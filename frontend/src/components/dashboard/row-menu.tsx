@@ -53,14 +53,14 @@ export function RowMenu({
         aria-haspopup="menu"
         aria-expanded={open}
         onClick={() => setOpen((v) => !v)}
-        className="rounded-md p-1.5 text-muted transition-colors hover:bg-[#1f1f1f] hover:text-foreground"
+        className="rounded-md p-1.5 text-muted transition-colors hover:bg-border hover:text-foreground"
       >
         <MoreVertical className="h-4 w-4" />
       </button>
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-md border border-[#1f1f1f] bg-[#0d0d0d] p-1 shadow-xl"
+          className="absolute right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-md border border-border bg-[#0d0d0d] p-1 shadow-xl"
         >
           {items.map((item, i) =>
             item.href ? (
@@ -74,7 +74,7 @@ export function RowMenu({
                   "flex items-center gap-2 rounded px-2.5 py-1.5 text-sm transition-colors",
                   item.danger
                     ? "text-[#f87171] hover:bg-[#3a1a1a]"
-                    : "text-foreground hover:bg-[#1f1f1f]"
+                    : "text-foreground hover:bg-border"
                 )}
               >
                 {item.icon}
@@ -93,7 +93,7 @@ export function RowMenu({
                   "flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm transition-colors",
                   item.danger
                     ? "text-[#f87171] hover:bg-[#3a1a1a]"
-                    : "text-foreground hover:bg-[#1f1f1f]"
+                    : "text-foreground hover:bg-border"
                 )}
               >
                 {item.icon}
