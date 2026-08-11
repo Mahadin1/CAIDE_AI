@@ -4,6 +4,9 @@ import { ArrowLeft, Download, FileCode, FileSpreadsheet } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { ReportCharts } from "@/components/report/report-charts";
 import { ReportOverview } from "@/components/report/report-overview";
+import { AdaptiveResults } from "@/components/report/adaptive-results";
+import { SkillsPanel } from "@/components/report/skills-panel";
+import { ReportQa } from "@/components/report/report-qa";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,7 +49,7 @@ export default async function ReportPage({
   const { data: report } = await supabase
     .from("reports")
     .select(
-      "id, upload_id, summary_json, narrative, created_at, analysis_mode, source_format, sample_info_json, uploads(id, filename, created_at)"
+      "id, upload_id, summary_json, narrative, created_at, analysis_mode, source_format, sample_info_json, column_glossary, uploads(id, filename, created_at)"
     )
     .eq("id", id)
     .single<ReportWithUpload>();
@@ -55,10 +58,12 @@ export default async function ReportPage({
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("plan")
-    .single<Pick<Profile, "plan">>();
+    .select("plan, credits, qa_credits")
+    .single<Pick<Profile, "plan" | "credits" | "qa_credits">>();
 
   const isPro = profile?.plan !== "free";
+  const credits = profile?.credits ?? 0;
+  const qaCredits = profile?.qa_credits ?? 0;
   const summary = report.summary_json;
   const sample = report.sample_info_json;
   const findings = summary.findings ?? [];
@@ -216,8 +221,44 @@ export default async function ReportPage({
         </CardContent>
       </Card>
 
+      {/* Column glossary — plain-English definitions for the analysis columns */}
+      {report.column_glossary && Object.keys(report.column_glossary).length > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle>Column glossary</CardTitle>
+            <CardDescription>How each column was interpreted by the analysis agent</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <dl className="grid gap-2 sm:grid-cols-2">
+              {Object.entries(report.column_glossary).map(([col, def]) => (
+                <div key={col} className="rounded-md border border-border bg-elevated px-3 py-2">
+                  <dt className="text-sm font-medium">{col}</dt>
+                  <dd className="mt-0.5 text-xs text-muted">{def}</dd>
+                </div>
+              ))}
+            </dl>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Adaptive multi-skill results (auto-segmentation, forecast, cohort…) */}
+      <AdaptiveResults summary={summary} reportId={id} />
+
       {/* Charts — only the ones relevant to what was flagged */}
       <ReportCharts summary={summary} reportId={id} />
+
+      {/* Advanced skills (#9-#15) — Pro+ only, charged from report credits */}
+      {isPro && (
+        <SkillsPanel
+          reportId={id}
+          summary={summary}
+          plan={profile?.plan ?? "free"}
+          credits={credits}
+        />
+      )}
+
+      {/* Report Q&A (#8) — Pro+ only, metered from qa_credits */}
+      {isPro && <ReportQa reportId={id} qaCredits={qaCredits} />}
     </div>
   );
 }

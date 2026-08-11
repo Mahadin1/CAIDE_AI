@@ -734,6 +734,213 @@ def _new_adaptive_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _multi_skill_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
+    """Findings from the six multi-skill adaptive tasks (eda/adaptive.py).
+
+    Language discipline is enforced here for the significance/importance
+    tasks: findings only ever state a "statistically significant difference"
+    or an "association" — never causation.
+    """
+    out: list[dict[str, Any]] = []
+    adaptive = summary.get("adaptive", {})
+
+    # 1. auto_segmentation
+    seg = adaptive.get("auto_segmentation")
+    if isinstance(seg, dict) and not seg.get("skipped") and seg.get("clusters"):
+        top = sorted(seg["clusters"], key=lambda c: c["size"], reverse=True)
+        biggest = top[0]
+        second = top[1] if len(top) > 1 else None
+        out.append({
+            **_base(
+                "auto_segmentation", "medium",
+                seg.get("method", "KMeans with silhouette-selected k."),
+            ),
+            "evidence": {
+                "k": seg.get("k"),
+                "silhouette": seg.get("silhouette"),
+                "rows_used": seg.get("rows_used"),
+                "biggest_cluster": biggest,
+            },
+            "interpretation": (
+                f"The data separates into {seg.get('k')} natural segments "
+                f"(silhouette {_f(seg.get('silhouette'))}). The largest is "
+                f"'{biggest['cluster']}' with {biggest['size']:,} rows "
+                f"({_pct(biggest['share'])} of the analyzed rows)."
+                + (f" A second distinct group of {second['size']:,} rows "
+                   f"({_pct(second['share'])}) sits separately."
+                   if second else "")
+            ),
+            "action": (
+                "Use the segment labels as a candidate segmentation variable, "
+                "then profile each segment by the columns that differ most."
+            ),
+            "message": f"The data separates into {seg.get('k')} distinct segments.",
+        })
+
+    # 2. forecast_metric
+    forecasts = adaptive.get("forecast_metric") or {}
+    if isinstance(forecasts, dict):
+        for key, res in forecasts.items():
+            if not isinstance(res, dict) or "history" not in res:
+                continue
+            mean = res.get("mean") or []
+            if len(mean) < 2:
+                continue
+            start_v, end_v = mean[0], mean[-1]
+            direction = "rising" if end_v > start_v else "falling"
+            out.append({
+                **_base("forecast", "medium",
+                        res.get("model", "statsmodels ETS / seasonal naive.")),
+                "column": f"{res.get('date_column')} · {res.get('metric_column')}",
+                "evidence": {
+                    "metric_column": res.get("metric_column"),
+                    "horizon": res.get("horizon"),
+                    "periods_trained": res.get("periods_trained"),
+                    "mean_forecast": mean,
+                    "lower": res.get("lower"),
+                    "upper": res.get("upper"),
+                    "trend_detectable": res.get("trend_detectable"),
+                },
+                "interpretation": (
+                    f"'{res.get('metric_column')}' is forecast to be "
+                    f"{direction} over the next {res.get('horizon')} periods "
+                    f"(from {_f(start_v)} to {_f(end_v)}), with a confidence "
+                    "band reported in the chart."
+                    + (" A trend is detectable in the history."
+                       if res.get("trend_detectable") else "")
+                ),
+                "action": "Review the band width — wide bands mean the "
+                          "outlook is uncertain and should not drive a "
+                          "single-number decision.",
+                "message": f"'{res.get('metric_column')}' is forecast to be {direction} over {res.get('horizon')} periods.",
+            })
+
+    # 3. cohort_retention
+    cohort = adaptive.get("cohort_retention")
+    if isinstance(cohort, dict) and not cohort.get("skipped") and cohort.get("most_notable"):
+        notable = cohort["most_notable"]
+        out.append({
+            **_base("cohort_retention", "medium",
+                    cohort.get("method", "Cohort-month retention matrix.")),
+            "column": f"{cohort.get('identifier_column')} · {cohort.get('date_column')}",
+            "evidence": {
+                "cohort": notable["cohort"],
+                "cohort_size": notable["cohort_size"],
+                "period": notable["period"],
+                "retention_before": notable["retention_before"],
+                "retention_after": notable["retention_after"],
+                "drop": notable["drop"],
+            },
+            "interpretation": (
+                f"The most striking retention pattern is the {_f(notable['drop'])}pp "
+                f"drop for the {notable['cohort']} cohort (of "
+                f"{notable['cohort_size']:,} entities) between period "
+                f"{notable['period'] - 1} and {notable['period']}: retention "
+                f"falls from {_f(notable['retention_before'], 1)}% to "
+                f"{_f(notable['retention_after'], 1)}%."
+            ),
+            "action": "Investigate what changed around that period for that "
+                      "cohort — the full matrix is in the chart.",
+            "message": f"Cohort {notable['cohort']} shows a {_f(notable['drop'], 1)}pp retention drop.",
+        })
+
+    # 4. group_significance_test (language: "statistically significant
+    #    difference" only — never causation)
+    gst = adaptive.get("group_significance_test") or {}
+    if isinstance(gst, dict):
+        for key, res in gst.items():
+            if not isinstance(res, dict) or not res.get("significant"):
+                continue
+            out.append({
+                **_base("group_significance", "medium",
+                        res.get("method", "t-test / Mann-Whitney U with "
+                                          "effect size.")),
+                "column": f"{res.get('numeric_column')} · {res.get('category_column')}",
+                "evidence": {
+                    "group_a": res.get("group_a"),
+                    "group_b": res.get("group_b"),
+                    "mean_a": res.get("mean_a"),
+                    "mean_b": res.get("mean_b"),
+                    "p_value": res.get("p_value"),
+                    "effect_size_d": res.get("effect_size_d"),
+                },
+                "interpretation": (
+                    f"'{res.get('group_a')}' and '{res.get('group_b')}' show "
+                    f"a statistically significant difference in "
+                    f"'{res.get('numeric_column')}' (p={_f(res.get('p_value'), 6)}, "
+                    f"Cohen's d={_f(res.get('effect_size_d'))}). The "
+                    f"'{res.get('group_a')}' group averages "
+                    f"{_f(res.get('mean_a'))} vs {_f(res.get('mean_b'))} for "
+                    f"'{res.get('group_b')}'."
+                ),
+                "action": "Treat the two groups as meaningfully different on "
+                          "this metric, then decide whether the size of the "
+                          "difference matters for the decision at hand.",
+                "message": f"'{res.get('group_a')}' vs '{res.get('group_b')}': a statistically significant difference in '{res.get('numeric_column')}'.",
+            })
+
+    # 5. feature_engineering_suggestions (advisory)
+    fe = adaptive.get("feature_engineering_suggestions")
+    if isinstance(fe, dict) and fe.get("advisory"):
+        logs = fe.get("log_transform_candidates") or []
+        pairs = fe.get("redundant_pairs") or []
+        if logs or pairs:
+            first_log = logs[0] if logs else None
+            first_pair = pairs[0] if pairs else None
+            parts = []
+            if first_log:
+                parts.append(f"log-transform {first_log['column']} "
+                             f"(skew {_f(first_log['skew'])})")
+            if first_pair:
+                parts.append(
+                    f"'{first_pair['column_a']}' and '{first_pair['column_b']}' "
+                    f"are near-duplicates (r={_f(first_pair['correlation'])})")
+            out.append({
+                **_base("feature_engineering", "low",
+                        fe.get("method", "Rule-based suggestions reusing "
+                                         "backbone skew/correlation stats.")),
+                "evidence": {
+                    "log_transform_candidates": fe.get("log_transform_candidates"),
+                    "encoding_suggestions": fe.get("encoding_suggestions"),
+                    "redundant_pairs": fe.get("redundant_pairs"),
+                },
+                "interpretation": (
+                    "Advisory feature-engineering suggestions: "
+                    + ("; ".join(parts) if parts else "none triggered.")
+                    + " No column was changed."
+                ),
+                "action": "Apply the transformations in your own pipeline "
+                          "before modelling — this is advice, not a change.",
+                "message": "Feature-engineering suggestions are available for this dataset.",
+            })
+
+    # 6. multivariate_anomaly_detection
+    anomaly = adaptive.get("multivariate_anomaly_detection")
+    if isinstance(anomaly, dict) and not anomaly.get("skipped"):
+        n = anomaly.get("n_flagged") or 0
+        out.append({
+            **_base("multivariate_anomalies", "medium",
+                    anomaly.get("method", "Isolation Forest over numeric "
+                                          "feature space.")),
+            "evidence": {
+                "n_flagged": n,
+                "share_flagged": anomaly.get("share_flagged"),
+                "contamination": anomaly.get("contamination"),
+                "rows_checked": anomaly.get("rows_checked"),
+            },
+            "interpretation": (
+                f"{n} rows ({_pct(anomaly.get('share_flagged'))}) are unusual "
+                "in COMBINATION across the numeric columns — they may not be "
+                "outliers in any single column, which per-column IQR checks "
+                "would miss."
+            ),
+            "action": "Inspect the flagged rows (available as a drill-down) — "
+                      "they may be errors or genuinely different subpopulations.",
+            "message": f"{n} rows are multivariate outliers (unusual in combination).",
+        })
+    return out
+
+
 def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     """Assemble all deterministic findings for a summary."""
     findings: list[dict[str, Any]] = []
@@ -768,6 +975,7 @@ def select_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
     findings += _trend_findings(summary)
     findings += _adaptive_findings(summary)
     findings += _new_adaptive_findings(summary)
+    findings += _multi_skill_findings(summary)
 
     if not summary.get("correlations") and not summary.get("numeric_stats"):
         findings.append({

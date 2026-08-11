@@ -218,13 +218,20 @@ class Worker:
 
             db_ops.set_upload_stage(client, upload_id, "computing",
                                     "Computing statistics and running tests…", 70)
+            # Server-side tier gating for the heavy adaptive tasks: the plan
+            # is fetched from the owner's profile, never trusted from the UI.
+            profile = await asyncio.to_thread(
+                db_ops.get_profile, client, upload["user_id"]
+            )
+            user_plan = (profile or {}).get("plan") if profile else None
             result = await asyncio.to_thread(
-                agent.execute, prepared, storage_path, overrides, prior_report
+                agent.execute, prepared, storage_path, overrides, prior_report,
+                user_plan,
             )
 
             db_ops.set_upload_stage(client, upload_id, "narrating",
                                     "Writing the plain-English report…", 90)
-            narrative = await agent.narrate_result(prepared, result)
+            narration = await agent.narrate_result(prepared, result)
 
             db_ops.set_upload_stage(client, upload_id, "persisting",
                                     "Saving your report…", 98)
@@ -232,7 +239,7 @@ class Worker:
                 client,
                 upload_id,
                 result["summary"],
-                narrative,
+                narration["narrative"],
                 analysis_plan_json={
                     "tasks": result["plan_tasks"],
                     "source": result["plan_source"],
@@ -241,6 +248,7 @@ class Worker:
                 sample_info_json=result["sample_info"],
                 analysis_mode=result["mode"],
                 source_format=result["format"],
+                column_glossary=narration["column_glossary"],
             )
             db_ops.set_report_export_urls(
                 client,

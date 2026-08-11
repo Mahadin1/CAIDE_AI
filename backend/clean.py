@@ -50,8 +50,23 @@ def subset_rows(
     column: str,
     value: str,
     limit: int = 500,
+    indices: list[int] | None = None,
 ) -> list[dict[str, Any]]:
-    """Return up to `limit` rows where `column` equals `value` (string match)."""
+    """Return up to `limit` rows behind a chart element.
+
+    Two selection modes:
+      * `column == value` (string match) — the classic bar-drill-down;
+      * `indices` — an explicit list of positional row positions (as produced
+        by auto_segmentation and multivariate_anomaly_detection), used by the
+        "rows in this cluster / flagged rows" drill-down.
+    """
+    if indices is not None:
+        selected = df.iloc[[i for i in indices if 0 <= i < len(df)]]
+        if len(selected) > limit:
+            selected = selected.head(limit)
+        return selected.astype(object).where(pd.notna(selected), None).to_dict(
+            orient="records"
+        )
     if column not in df.columns:
         return []
     target = str(value)

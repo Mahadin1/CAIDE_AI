@@ -166,13 +166,29 @@ def attach_prior_context(
 
 
 def build_overview(prepared: PreparedFile, summary: dict[str, Any]) -> dict[str, Any]:
-    """The overview block sent to the narrator alongside plan + findings."""
+    """The overview block sent to the narrator alongside plan + findings.
+
+    Includes a compact per-column summary (kind, cardinality, missingness,
+    example values) so the narrator can build the data-dictionary glossary in
+    the same single LLM call — no raw data, no new touchpoint (spec #7).
+    """
+    columns = []
+    for entry in prepared.fingerprint.get("columns", []):
+        columns.append({
+            "name": entry.get("name"),
+            "kind": entry.get("kind"),
+            "cardinality": entry.get("cardinality"),
+            "missing_pct": entry.get("missing_pct"),
+            "dtype": entry.get("dtype"),
+            "samples": (entry.get("samples") or [])[:3],
+        })
     return {
         "shape": summary["shape"],
         "format": prepared.loaded.fmt,
         "encoding": prepared.loaded.encoding,
         "mode": prepared.mode,
         "sample_info": prepared.sample_info,
+        "columns": columns,
     }
 
 
@@ -181,12 +197,15 @@ def execute(
     storage_path: str,
     overrides: dict[str, Any] | None = None,
     prior_report: dict[str, Any] | None = None,
+    user_plan: str | None = None,
 ) -> dict[str, Any]:
     """Deterministic half of the pipeline (blocking — call via to_thread).
 
     Returns summary + findings + provenance. The narrative is produced
     separately by :func:`narrate_result` so the worker can keep the event
     loop free during heavy pandas work and await the LLM separately.
+    `user_plan` gates the heavy adaptive tasks server-side (never trusted
+    from the frontend).
     """
     summary = run_pipeline_on_frame(
         prepared.loaded.df,
@@ -195,6 +214,7 @@ def execute(
         overrides=overrides,
         storage_path=storage_path,
         prior_report=prior_report,
+        user_plan=user_plan,
     )
     findings = select_findings(summary)
     summary["findings"] = findings
@@ -211,8 +231,12 @@ def execute(
     }
 
 
-async def narrate_result(prepared: PreparedFile, result: dict[str, Any]) -> str:
-    """Async LLM narration over an :func:`execute` result (with fallback)."""
+async def narrate_result(prepared: PreparedFile, result: dict[str, Any]) -> dict[str, Any]:
+    """Async LLM narration over an :func:`execute` result (with fallback).
+
+    Returns the narration bundle ``{"narrative": str, "column_glossary":
+    {col: description}}`` from a single LLM call (spec #7).
+    """
     overview = build_overview(prepared, result["summary"])
     return await narrate(result["plan_tasks"], result["findings"], overview)
 
@@ -225,7 +249,9 @@ async def execute_and_narrate(
 ) -> dict[str, Any]:
     """Convenience wrapper for small pipelines: execute + narrate."""
     result = execute(prepared, storage_path, overrides, prior_report)
-    result["narrative"] = await narrate_result(prepared, result)
+    bundle = await narrate_result(prepared, result)
+    result["narrative"] = bundle["narrative"]
+    result["column_glossary"] = bundle["column_glossary"]
     return result
 
 

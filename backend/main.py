@@ -32,6 +32,8 @@ from clean import clean_dataframe, dataframe_to_csv_bytes, subset_rows
 from config import settings
 from storage_utils import download_source
 from eda.errors import FriendlyError, error_status
+from eda.gating import credit_cost, meets_tier, required_tier, qa_credits_for_plan
+from eda import initiated, joinskill, qa as qa_skill
 from export_html import build_html
 from webhooks import router as paddle_router
 from worker import worker
@@ -104,6 +106,22 @@ class RetryRequest(BaseModel):
 
 class AccountDeleteRequest(BaseModel):
     user_id: str
+
+
+class SkillRunRequest(BaseModel):
+    user_id: str
+    params: dict[str, Any] | None = None
+
+
+class QaRequest(BaseModel):
+    user_id: str
+    question: str
+
+
+class JoinQualityRequest(BaseModel):
+    user_id: str
+    storage_path: str
+    params: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -604,11 +622,14 @@ async def delete_account(req: AccountDeleteRequest) -> dict[str, str]:
 async def report_subset(
     report_id: str,
     user_id: str = Query(...),
-    column: str = Query(...),
+    column: str = Query(""),
     value: str = Query(""),
     limit: int = Query(500, ge=1, le=2000),
+    indices: str = Query(""),
 ) -> dict[str, Any]:
-    """Pro-only drill-down: rows behind a chart bar (column == value)."""
+    """Pro-only drill-down: rows behind a chart bar (column == value) OR an
+    explicit list of positional row indices (auto_segmentation clusters,
+    multivariate anomaly flags)."""
     _require_config()
     client = db_ops.get_client()
     _check_pro(client, user_id)
@@ -619,16 +640,26 @@ async def report_subset(
     if content is None:
         raise HTTPException(status_code=404, detail="Source file not found")
 
+    indices_list: list[int] | None = None
+    if indices.strip():
+        try:
+            indices_list = [int(x) for x in indices.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(
+                status_code=422, detail="indices must be a comma-separated list of integers"
+            ) from None
+
     loaded = None
     try:
         loaded = await asyncio.to_thread(
             agent.load_and_classify, content, upload["filename"],
             upload["storage_path"],
         )
-        if column not in loaded["df"].columns:
-            raise HTTPException(status_code=422, detail="Unknown column")
+        if indices_list is None:
+            if column not in loaded["df"].columns:
+                raise HTTPException(status_code=422, detail="Unknown column")
         rows = await asyncio.to_thread(
-            subset_rows, loaded["df"], column, value, limit
+            subset_rows, loaded["df"], column, value, limit, indices_list
         )
     except FriendlyError as exc:
         return _friendly_response(exc)
@@ -637,3 +668,251 @@ async def report_subset(
             await asyncio.to_thread(agent.dispose, loaded["loaded"])
 
     return {"column": column, "value": value, "rows": rows, "count": len(rows)}
+
+
+# ---------------------------------------------------------------------------
+# User-initiated skills (#9-#15) + report Q&A (#8)
+# ---------------------------------------------------------------------------
+
+_SKILL_HANDLERS = {
+    "predictive_baseline": initiated.predictive_baseline,
+    "psm": initiated.psm_analysis,
+    "key_driver": initiated.key_driver_analysis,
+    "what_if": initiated.what_if_scenario,
+    "segment_comparison": initiated.segment_comparison,
+    "decompose": initiated.decompose_change,
+}
+
+
+def _check_skill_gate(client, user_id: str, skill: str) -> dict[str, Any]:
+    """Server-side tier + credit gate for a user-initiated skill.
+
+    Gating lives here (the API layer), never in the frontend: the required
+    tier and per-use credit cost come from eda/gating.py. A skipped skill run
+    is never charged.
+    """
+    required = required_tier(skill)
+    profile = db_ops.get_profile(client, user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    plan = profile.get("plan") or "free"
+    if required and not meets_tier(plan, required):
+        raise HTTPException(
+            status_code=403,
+            detail=f"'{skill}' requires the {required.title()} plan or higher.",
+        )
+    cost = credit_cost(skill)
+    if cost > 0 and int(profile.get("credits") or 0) < cost:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"'{skill}' costs {cost} credits and you have "
+                f"{int(profile.get('credits') or 0)}. Upgrade or wait for the "
+                "monthly credit reset."
+            ),
+        )
+    return profile
+
+
+def _load_source(client, storage_path: str, filename: str) -> dict[str, Any]:
+    """Download + load + classify a stored source file (blocking)."""
+    content = download_source(client, storage_path)
+    if content is None:
+        raise HTTPException(status_code=404, detail="File not found in storage")
+    return agent.load_and_classify(content, filename, storage_path)
+
+
+@app.post("/reports/{report_id}/skills/{skill}")
+async def run_skill(
+    report_id: str, skill: str, req: SkillRunRequest
+) -> dict[str, Any]:
+    """Run a user-initiated analysis skill against a finished report.
+
+    Tier + credits are enforced server-side before any compute. Results are
+    persisted to skill_runs; credits are only charged on a completed run
+    (skipped/failed runs are free).
+    """
+    _require_config()
+    client = db_ops.get_client()
+    if skill not in _SKILL_HANDLERS and skill != "join_quality":
+        raise HTTPException(status_code=404, detail=f"Unknown skill '{skill}'")
+    _check_skill_gate(client, req.user_id, skill)
+    row = _get_report_owned(client, report_id, req.user_id)
+    upload = row["uploads"]
+
+    params = req.params or {}
+    run = db_ops.insert_skill_run(
+        client, report_id, req.user_id, skill, params, credit_cost(skill)
+    )
+    loaded = None
+    try:
+        loaded = await asyncio.to_thread(
+            _load_source, client, upload["storage_path"], upload["filename"]
+        )
+        if skill == "what_if":
+            baseline = db_ops.get_completed_baseline(client, report_id, req.user_id)
+            result = await asyncio.to_thread(
+                _SKILL_HANDLERS[skill], loaded["df"],
+                loaded["classification"], params, baseline,
+            )
+        else:
+            result = await asyncio.to_thread(
+                _SKILL_HANDLERS[skill], loaded["df"],
+                loaded["classification"], params,
+            )
+    except FriendlyError as exc:
+        db_ops.finish_skill_run(client, run["id"], exc.to_dict(), "failed")
+        return _friendly_response(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("skill %s failed report=%s", skill, report_id)
+        db_ops.finish_skill_run(
+            client, run["id"],
+            {"error": "Something went wrong while running this skill. "
+                      "Please try again.", "detail": str(exc)},
+            "failed",
+        )
+        raise HTTPException(
+            status_code=500, detail="The skill run failed. Please try again."
+        ) from exc
+    finally:
+        if loaded and loaded.get("loaded"):
+            await asyncio.to_thread(agent.dispose, loaded["loaded"])
+
+    if result.get("skipped"):
+        db_ops.finish_skill_run(client, run["id"], result, "skipped")
+        return {"run_id": run["id"], "status": "skipped", "reason": result["reason"]}
+
+    db_ops.finish_skill_run(client, run["id"], result, "done")
+    try:
+        db_ops.decrement_credits(client, req.user_id, credit_cost(skill))
+    except Exception:  # noqa: BLE001
+        logger.warning("credit decrement failed after skill=%s", skill)
+    logger.info("skill %s done report=%s run=%s", skill, report_id, run["id"])
+    return {"run_id": run["id"], "status": "done", "result": result}
+
+
+@app.post("/reports/{report_id}/join")
+async def run_join_quality(
+    report_id: str, req: JoinQualityRequest
+) -> dict[str, Any]:
+    """#15 — attach a second file and assess join quality before merging."""
+    _require_config()
+    client = db_ops.get_client()
+    _check_skill_gate(client, req.user_id, "join_quality")
+    row = _get_report_owned(client, report_id, req.user_id)
+    upload = row["uploads"]
+
+    prefix = f"uploads/{req.user_id}/"
+    if not req.storage_path.startswith(prefix):
+        raise HTTPException(
+            status_code=403, detail="storage_path does not belong to this user"
+        )
+
+    run = db_ops.insert_skill_run(
+        client, report_id, req.user_id, "join_quality",
+        {**req.params, "second_storage_path": req.storage_path},
+        credit_cost("join_quality"),
+    )
+    loaded_left = loaded_right = None
+    try:
+        loaded_left = await asyncio.to_thread(
+            _load_source, client, upload["storage_path"], upload["filename"]
+        )
+        second_name = req.storage_path.rsplit("/", 1)[-1]
+        loaded_right = await asyncio.to_thread(
+            _load_source, client, req.storage_path, second_name
+        )
+        result = await asyncio.to_thread(
+            joinskill.join_quality, loaded_left["df"], loaded_right["df"],
+            req.params or {},
+        )
+    except FriendlyError as exc:
+        db_ops.finish_skill_run(client, run["id"], exc.to_dict(), "failed")
+        return _friendly_response(exc)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("join_quality failed report=%s", report_id)
+        db_ops.finish_skill_run(client, run["id"], {"error": str(exc)}, "failed")
+        raise HTTPException(
+            status_code=500, detail="The join assessment failed. Please try again."
+        ) from exc
+    finally:
+        if loaded_left and loaded_left.get("loaded"):
+            await asyncio.to_thread(agent.dispose, loaded_left["loaded"])
+        if loaded_right and loaded_right.get("loaded"):
+            await asyncio.to_thread(agent.dispose, loaded_right["loaded"])
+
+    if result.get("skipped"):
+        db_ops.finish_skill_run(client, run["id"], result, "skipped")
+        return {"run_id": run["id"], "status": "skipped", "reason": result["reason"]}
+
+    db_ops.finish_skill_run(client, run["id"], result, "done")
+    try:
+        db_ops.decrement_credits(client, req.user_id, credit_cost("join_quality"))
+    except Exception:  # noqa: BLE001
+        logger.warning("credit decrement failed after join_quality")
+    return {"run_id": run["id"], "status": "done", "result": result}
+
+
+@app.get("/reports/{report_id}/skills")
+async def report_skills(
+    report_id: str, user_id: str = Query(...)
+) -> dict[str, Any]:
+    """History of skill runs for a report (own rows only)."""
+    _require_config()
+    client = db_ops.get_client()
+    _get_report_owned(client, report_id, user_id)
+    runs = db_ops.list_skill_runs(client, report_id, user_id)
+    return {"runs": runs}
+
+
+@app.post("/reports/{report_id}/qa")
+async def report_qa(report_id: str, req: QaRequest) -> dict[str, Any]:
+    """#8 — ask a question about a finished report.
+
+    Answers come only from the stored report (summary_json + findings +
+    narrative + column_glossary). Metered against the separate qa_credits
+    meter; Pro+ only. Turns are persisted.
+    """
+    _require_config()
+    client = db_ops.get_client()
+    profile = db_ops.get_profile(client, req.user_id)
+    if profile is None:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    plan = profile.get("plan") or "free"
+    qa_limit = qa_credits_for_plan(plan)
+    if qa_limit <= 0:
+        raise HTTPException(
+            status_code=403,
+            detail="Live Q&A requires the Pro or Scale plan.",
+        )
+    if int(profile.get("qa_credits") or 0) <= 0:
+        raise HTTPException(
+            status_code=402,
+            detail="You're out of Q&A credits for this month.",
+        )
+    row = _get_report_owned(client, report_id, req.user_id)
+
+    previous = db_ops.list_qa_turns(client, report_id, req.user_id, limit=10)
+    answer = await qa_skill.answer_question(row, req.question, previous)
+
+    db_ops.insert_qa_turn(
+        client, report_id, req.user_id, req.question,
+        answer["answer"], answer["answered"],
+    )
+    try:
+        db_ops.decrement_qa_credit(client, req.user_id)
+    except Exception:  # noqa: BLE001
+        logger.warning("qa_credit decrement failed report=%s", report_id)
+    return {"answer": answer["answer"], "answered": answer["answered"]}
+
+
+@app.get("/reports/{report_id}/qa")
+async def report_qa_history(
+    report_id: str, user_id: str = Query(...)
+) -> dict[str, Any]:
+    """Q&A turn history for a report (own rows only)."""
+    _require_config()
+    client = db_ops.get_client()
+    _get_report_owned(client, report_id, user_id)
+    turns = db_ops.list_qa_turns(client, report_id, user_id)
+    return {"turns": turns}

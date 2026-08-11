@@ -17,19 +17,29 @@ export function RowDrilldown({
   value,
   title,
   onClose,
+  useIndices = false,
 }: {
   reportId: string;
   column: string;
   value: string;
   title: string;
   onClose: () => void;
+  useIndices?: boolean;
 }) {
   const [data, setData] = useState<SubsetResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
-    fetch(`/api/reports/${reportId}/subset?column=${encodeURIComponent(column)}&value=${encodeURIComponent(value)}&limit=200`)
+    const params = new URLSearchParams();
+    if (useIndices) {
+      params.set("indices", value);
+    } else {
+      params.set("column", column);
+      params.set("value", value);
+    }
+    params.set("limit", "200");
+    fetch(`/api/reports/${reportId}/subset?${params.toString()}`)
       .then(async (res) => {
         const body = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(body.detail ?? "Could not load rows");
@@ -41,7 +51,7 @@ export function RowDrilldown({
     return () => {
       active = false;
     };
-  }, [reportId, column, value]);
+  }, [reportId, column, value, useIndices]);
 
   const rows = data?.rows ?? [];
   const columns = rows.length > 0 ? Object.keys(rows[0]) : [];
@@ -61,8 +71,10 @@ export function RowDrilldown({
             <div className="min-w-0">
               <p className="truncate text-sm font-medium">{title}</p>
               <p className="text-xs text-muted">
-                {column} = “{value}”
-                {data && data.count > 0 && ` · first ${data.count} of the matching rows`}
+                {useIndices
+                  ? `First ${data?.count ?? 0} of the requested row positions`
+                  : `${column} = “${value}”`}
+                {data && data.count > 0 && !useIndices && ` · first ${data.count} of the matching rows`}
               </p>
             </div>
           </div>

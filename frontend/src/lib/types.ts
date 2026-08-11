@@ -6,6 +6,7 @@ export interface Profile {
   name: string | null;
   plan: Plan;
   credits: number;
+  qa_credits: number;
   reports_this_month: number;
   created_at: string;
 }
@@ -175,6 +176,7 @@ export interface Report {
   analysis_plan_json?: { tasks?: PlanTask[]; source?: string } | null;
   overrides_json?: Record<string, unknown> | null;
   sample_info_json?: SampleInfo | null;
+  column_glossary?: Record<string, string> | null;
   export_html_url?: string | null;
   export_pdf_url?: string | null;
   cleaned_data_url?: string | null;
@@ -218,4 +220,139 @@ export interface Subscription {
   paddle_subscription_id: string | null;
   status: "active" | "inactive" | "cancelled";
   updated_at: string;
+}
+
+// ---------------------------------------------------------------------------
+// Adaptive multi-skill results (summary.adaptive)
+// ---------------------------------------------------------------------------
+
+export interface SegmentationCluster {
+  cluster: number;
+  size: number;
+  share: number;
+  centroid: Record<string, number>;
+}
+export interface SegmentationResult {
+  skipped?: boolean;
+  reason?: string;
+  k?: number;
+  silhouette?: number;
+  rows_used?: number;
+  columns?: string[];
+  clusters?: SegmentationCluster[];
+  row_positions?: Record<string, number[]>;
+  method?: string;
+}
+
+export interface ForecastResultEntry {
+  date_column: string;
+  metric_column: string;
+  periods: string[];
+  history: number[];
+  mean: number[];
+  lower: number[];
+  upper: number[];
+  horizon: number;
+  periods_trained: number;
+  trend_detectable: boolean;
+  model: string;
+}
+export type ForecastResult = { _capped?: boolean } & Record<
+  string,
+  ForecastResultEntry
+>;
+
+export interface CohortResult {
+  skipped?: boolean;
+  reason?: string;
+  identifier_column: string;
+  date_column: string;
+  cohorts: string[];
+  periods: number[];
+  matrix: { cohort: string; cohort_size: number; retention: number[] }[];
+  most_notable?: {
+    cohort: string;
+    cohort_size: number;
+    period: number;
+    retention_before: number;
+    retention_after: number;
+    drop: number;
+  } | null;
+  method?: string;
+}
+
+export interface GroupSignificanceEntry {
+  group_a: string;
+  group_b: string;
+  n_a: number;
+  n_b: number;
+  mean_a: number;
+  mean_b: number;
+  method: string;
+  p_value: number;
+  significant: boolean;
+  effect_size_d: number | null;
+  interpretation: string;
+  direction: string;
+  numeric_column: string;
+  category_column: string;
+}
+export type GroupSignificanceResult = Record<string, GroupSignificanceEntry>;
+
+export interface FeatureEngineeringResult {
+  skipped?: boolean;
+  reason?: string;
+  advisory: boolean;
+  log_transform_candidates: { column: string; skew: number; log_transform: boolean; suggestion: string }[];
+  encoding_suggestions: { column: string; cardinality: number; suggestion: string }[];
+  redundant_pairs: { column_a: string; column_b: string; correlation: number }[];
+  method?: string;
+}
+
+export interface AnomalyResult {
+  skipped?: boolean;
+  reason?: string;
+  n_flagged: number;
+  share_flagged: number;
+  contamination: number;
+  rows_checked: number;
+  columns: string[];
+  chart_data: { index: number; score: number; values: Record<string, number> }[];
+  row_positions: number[];
+  method?: string;
+}
+
+// ---------------------------------------------------------------------------
+// User-initiated skill runs (#9-#15)
+// ---------------------------------------------------------------------------
+
+export type UserSkill =
+  | "predictive_baseline"
+  | "psm"
+  | "key_driver"
+  | "what_if"
+  | "segment_comparison"
+  | "decompose"
+  | "join_quality";
+
+export interface SkillRun {
+  id: string;
+  report_id: string;
+  user_id: string;
+  skill: UserSkill;
+  params_json: Record<string, unknown> | null;
+  status: "running" | "done" | "failed" | "skipped";
+  result_json: Record<string, unknown> | null;
+  credit_cost: number;
+  created_at: string;
+}
+
+export interface QaTurn {
+  id: string;
+  report_id: string;
+  question: string;
+  answer: string;
+  answered: boolean;
+  model: string | null;
+  created_at: string;
 }

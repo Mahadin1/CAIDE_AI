@@ -16,6 +16,7 @@ create table if not exists public.profiles (
   name text,
   plan text not null default 'free' check (plan in ('free', 'starter', 'pro', 'scale')),
   credits int not null default 0,
+  qa_credits int not null default 0,
   reports_this_month int not null default 0,
   created_at timestamptz not null default now()
 );
@@ -57,6 +58,7 @@ create table if not exists public.reports (
   upload_id uuid references public.uploads(id) on delete cascade not null,
   summary_json jsonb not null,
   narrative text not null,
+  column_glossary jsonb,
   -- adaptive-planning / large-file provenance (mirrors uploads for convenience)
   analysis_plan_json jsonb,
   overrides_json jsonb,
@@ -80,12 +82,47 @@ create table if not exists public.subscriptions (
 );
 
 -- ============================================================
+-- skill_runs: one row per user-initiated skill execution (#8-#15).
+-- A run belongs to the report it was attached to and to its owner.
+-- result_json holds the deterministic output (models are re-fit
+-- deterministically, never persisted).
+-- ============================================================
+create table if not exists public.skill_runs (
+  id uuid primary key default gen_random_uuid(),
+  report_id uuid references public.reports(id) on delete cascade not null,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  skill text not null,
+  params_json jsonb,
+  status text not null default 'running' check (status in ('running', 'done', 'failed', 'skipped')),
+  result_json jsonb,
+  credit_cost int not null default 0,
+  created_at timestamptz not null default now()
+);
+
+-- ============================================================
+-- qa_turns: persisted report-Q&A turns (#8). Separate, cheaper meter.
+-- ============================================================
+create table if not exists public.qa_turns (
+  id uuid primary key default gen_random_uuid(),
+  report_id uuid references public.reports(id) on delete cascade not null,
+  user_id uuid references public.profiles(id) on delete cascade not null,
+  question text not null,
+  answer text not null,
+  answered boolean not null default true,
+  model text,
+  created_at timestamptz not null default now()
+);
+
+-- ============================================================
 -- Indexes
 -- ============================================================
 create index if not exists uploads_user_id_idx on public.uploads(user_id);
 create index if not exists uploads_status_idx on public.uploads(status);
 create index if not exists reports_upload_id_idx on public.reports(upload_id);
 create index if not exists profiles_plan_idx on public.profiles(plan);
+create index if not exists skill_runs_report_idx on public.skill_runs(report_id);
+create index if not exists skill_runs_user_idx on public.skill_runs(user_id);
+create index if not exists qa_turns_report_idx on public.qa_turns(report_id);
 
 -- ============================================================
 -- Row Level Security
@@ -94,6 +131,8 @@ alter table public.profiles enable row level security;
 alter table public.uploads enable row level security;
 alter table public.reports enable row level security;
 alter table public.subscriptions enable row level security;
+alter table public.skill_runs enable row level security;
+alter table public.qa_turns enable row level security;
 
 -- profiles: a user can read/update their own row; insert handled by trigger
 drop policy if exists "profiles_select_own" on public.profiles;
@@ -167,6 +206,38 @@ create policy "subscriptions_update_own"
   on public.subscriptions for update
   using (user_id = auth.uid());
 
+-- skill_runs: users manage only their own runs
+drop policy if exists "skill_runs_select_own" on public.skill_runs;
+create policy "skill_runs_select_own"
+  on public.skill_runs for select
+  using (user_id = auth.uid());
+
+drop policy if exists "skill_runs_insert_own" on public.skill_runs;
+create policy "skill_runs_insert_own"
+  on public.skill_runs for insert
+  with check (user_id = auth.uid());
+
+drop policy if exists "skill_runs_update_own" on public.skill_runs;
+create policy "skill_runs_update_own"
+  on public.skill_runs for update
+  using (user_id = auth.uid());
+
+-- qa_turns: users manage only their own turns
+drop policy if exists "qa_turns_select_own" on public.qa_turns;
+create policy "qa_turns_select_own"
+  on public.qa_turns for select
+  using (user_id = auth.uid());
+
+drop policy if exists "qa_turns_insert_own" on public.qa_turns;
+create policy "qa_turns_insert_own"
+  on public.qa_turns for insert
+  with check (user_id = auth.uid());
+
+drop policy if exists "qa_turns_delete_own" on public.qa_turns;
+create policy "qa_turns_delete_own"
+  on public.qa_turns for delete
+  using (user_id = auth.uid());
+
 -- ============================================================
 -- Trigger: create a profile row automatically on signup
 -- ============================================================
@@ -228,6 +299,32 @@ begin
 end;
 $$;
 
+-- Decrement a variable amount (used by user-initiated skills).
+create or replace function public.decrement_credits(uid uuid, amount int)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+  set credits = greatest(credits - coalesce(amount, 0), 0)
+  where id = uid;
+end;
+$$;
+
+-- Decrement the separate Q&A meter. Never below zero.
+create or replace function public.decrement_qa_credit(uid uuid)
+returns void
+language plpgsql
+security definer set search_path = public
+as $$
+begin
+  update public.profiles
+  set qa_credits = greatest(qa_credits - 1, 0)
+  where id = uid;
+end;
+$$;
+
 -- ============================================================
 -- Monthly credit reset (called by cron / scheduled function)
 -- ============================================================
@@ -243,6 +340,11 @@ begin
         when 'starter' then 30
         when 'pro' then 100
         when 'scale' then 300
+        else 0
+      end,
+      qa_credits = case plan
+        when 'pro' then 300
+        when 'scale' then 1000
         else 0
       end,
       reports_this_month = 0;
@@ -265,6 +367,7 @@ alter table public.uploads
   check (status in ('pending', 'ready', 'processing', 'done', 'failed'));
 
 alter table public.profiles add column if not exists credits int not null default 0;
+alter table public.profiles add column if not exists qa_credits int not null default 0;
 
 -- Backfill credits for users who existed before credits existed.
 update public.profiles
@@ -276,6 +379,15 @@ set credits = case plan
       else 0
     end
 where credits = 0;
+
+-- Backfill qa credits for pro/scale users.
+update public.profiles
+set qa_credits = case plan
+      when 'pro' then 300
+      when 'scale' then 1000
+      else 0
+    end
+where qa_credits = 0;
 
 -- ============================================================
 -- Idempotent upgrades for databases created before the adaptive
@@ -303,6 +415,7 @@ alter table public.reports add column if not exists source_format text;
 alter table public.reports add column if not exists export_html_url text;
 alter table public.reports add column if not exists export_pdf_url text;
 alter table public.reports add column if not exists cleaned_data_url text;
+alter table public.reports add column if not exists column_glossary jsonb;
 
 -- ============================================================
 -- Storage buckets

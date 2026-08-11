@@ -21,6 +21,7 @@ import pandas as pd
 from eda import tests as stat_tests
 from eda import text as text_analysis
 from eda import dates as dates_analysis
+from eda import adaptive as adaptive_tasks
 from eda.stats_core import (
     apply_overrides,
     build_chart_specs,
@@ -28,6 +29,7 @@ from eda.stats_core import (
 )
 from eda.classification import classify_columns
 from eda import advanced as advanced_tasks
+from eda.gating import adaptive_task_tier, meets_tier
 
 ROBUST_Z_THRESHOLD = 3.5
 
@@ -294,6 +296,15 @@ _register("text_theme_extraction")(advanced_tasks.text_themes)
 _register("distribution_drift")(advanced_tasks.distribution_drift)
 _register("pattern_extraction_proposal")(
     advanced_tasks.patterns_proposal)
+_register("auto_segmentation")(adaptive_tasks.auto_segmentation)
+_register("forecast_metric")(adaptive_tasks.forecast_metric)
+_register("cohort_retention")(adaptive_tasks.cohort_retention)
+_register("group_significance_test")(
+    adaptive_tasks.group_significance_test)
+_register("feature_engineering_suggestions")(
+    adaptive_tasks.feature_engineering_suggestions)
+_register("multivariate_anomaly_detection")(
+    adaptive_tasks.multivariate_anomaly_detection)
 
 
 def _execute_task(
@@ -333,6 +344,18 @@ def _execute_task(
             return handler(df, task)
         if ttype in ("normality", "distribution_fit", "anova_kruskal"):
             return handler(df, task)
+        if ttype == "auto_segmentation":
+            return handler(df, classification, task)
+        if ttype == "forecast_metric":
+            return handler(df, classification, task)
+        if ttype == "cohort_retention":
+            return handler(df, classification, task)
+        if ttype == "group_significance_test":
+            return handler(df, classification, task, summary)
+        if ttype == "feature_engineering_suggestions":
+            return handler(df, classification, task, summary)
+        if ttype == "multivariate_anomaly_detection":
+            return handler(df, classification, task)
         if ttype in ("category_harmonization", "text_theme_extraction",
                      "pattern_extraction_proposal"):
             return handler(df, classification, task)
@@ -354,8 +377,14 @@ def execute_plan(
     classification: dict[str, dict[str, Any]],
     plan_tasks: list[dict[str, Any]],
     prior_report: dict[str, Any] | None = None,
+    user_plan: str | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
-    """Run the backbone + plan. Returns (summary, executed, skipped)."""
+    """Run the backbone + plan. Returns (summary, executed, skipped).
+
+    `user_plan` is the owner's subscription plan. Adaptive tasks gated to a
+    paid tier (see eda/gating.py) are skipped with an explicit reason when the
+    plan is below the required tier — never silently dropped, never forced.
+    """
     summary = run_backbone(df, classification)
     if prior_report:
         # Private scratch key consumed by the distribution_drift task; it is
@@ -367,6 +396,14 @@ def execute_plan(
 
     for task in plan_tasks:
         ttype = task["type"]
+        required = adaptive_task_tier(ttype)
+        if required and not meets_tier(user_plan, required):
+            skipped.append({
+                "id": task["id"], "type": ttype,
+                "reason": f"This analysis requires a {required.title()} or "
+                          "higher plan.",
+            })
+            continue
         result = _execute_task(task, summary, df, classification)
         if result and result.get("skipped"):
             skipped.append({"id": task["id"], "type": ttype,
@@ -407,11 +444,14 @@ def run_pipeline_on_frame(
     overrides: dict[str, Any] | None = None,
     storage_path: str = "",
     prior_report: dict[str, Any] | None = None,
+    user_plan: str | None = None,
 ) -> dict[str, Any]:
     """Build the full summary for a loaded frame.
 
     Handles user overrides (column kinds, exclusions), the streaming globals
-    for sampled files, and the adaptive plan execution.
+    for sampled files, and the adaptive plan execution. `user_plan` gates the
+    heavy adaptive tasks (auto_segmentation / forecast_metric /
+    group_significance_test) server-side.
     """
     overrides = overrides or {}
 
@@ -426,7 +466,8 @@ def run_pipeline_on_frame(
             classification[col] = {**base, "kind": kind}
 
     summary, executed, skipped = execute_plan(
-        df, classification, plan_tasks, prior_report=prior_report
+        df, classification, plan_tasks, prior_report=prior_report,
+        user_plan=user_plan,
     )
 
     # Sampling provenance + exact streaming globals for sampled files.

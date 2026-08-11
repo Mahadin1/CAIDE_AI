@@ -41,6 +41,19 @@ KNOWN_TASK_TYPES = {
     "category_harmonization", "outlier_subpopulation", "data_quality_score",
     "text_theme_extraction", "distribution_drift",
     "pattern_extraction_proposal",
+    # Multi-skill platform adaptive tasks.
+    "auto_segmentation", "forecast_metric", "cohort_retention",
+    "group_significance_test", "feature_engineering_suggestions",
+    "multivariate_anomaly_detection",
+}
+
+# Adaptive tasks gated to paid tiers are *executed* only for eligible plans
+# (enforced in eda/executor.py). This set is advertised to the planner so the
+# LLM can still propose them; the executor decides based on the user's plan.
+TIER_GATED_ADAPTIVE = {
+    "auto_segmentation": "starter",
+    "forecast_metric": "starter",
+    "group_significance_test": "starter",
 }
 
 PLANNER_SYSTEM_PROMPT = (
@@ -59,7 +72,10 @@ PLANNER_SYSTEM_PROMPT = (
     "mixed_type_cleanup, text_top_words, group_comparison, "
     "cardinality_sanity, category_harmonization, outlier_subpopulation, "
     "data_quality_score, text_theme_extraction, distribution_drift, "
-    "pattern_extraction_proposal, custom_question\n\n"
+    "pattern_extraction_proposal, auto_segmentation, forecast_metric, "
+    "cohort_retention, group_significance_test, "
+    "feature_engineering_suggestions, multivariate_anomaly_detection, "
+    "custom_question\n\n"
     "Rules:\n"
     "- Choose 5 to 12 tasks that best fit THIS dataset's story. Do not pick "
     "tasks the data cannot support (e.g. time_features with no date-like "
@@ -80,6 +96,19 @@ PLANNER_SYSTEM_PROMPT = (
     "outlier_subpopulation suits numeric columns with outliers plus a "
     "categorical column; pattern_extraction_proposal suits text columns that "
     "may hold a repeated embedded pattern.\n"
+    "- auto_segmentation ONLY with >= 3 numeric columns and enough rows: "
+    "KMeans clustering with silhouette-selected k.\n"
+    "- forecast_metric ONLY when a date-like column and a numeric metric "
+    "share at least 12 monthly periods of history; cap to one pair.\n"
+    "- cohort_retention ONLY when an identifier-like column and a date-like "
+    "column co-occur across multiple periods (user/activity tables).\n"
+    "- group_significance_test ONLY when a numeric metric and a "
+    "two-value categorical column exist; prefer it over anova_kruskal for "
+    "exactly-2-value categories.\n"
+    "- feature_engineering_suggestions suits skewed numerics, high-"
+    "cardinality categories or strongly correlated pairs (advisory only).\n"
+    "- multivariate_anomaly_detection suits >= 2 numeric columns and enough "
+    "rows; it complements per-column outlier checks.\n"
     "- A 'custom_question' task may encode a hypothesis worth testing "
     "about specific columns; keep description concrete.\n"
     "- Keep every description and rationale under 30 words. Concise plans "
@@ -192,6 +221,39 @@ def _fallback_plan(fingerprint: dict[str, Any]) -> list[dict[str, Any]]:
         add("seasonality", "Check for month-of-year seasonality in row counts",
             "Seasonality tells you when activity concentrates.",
             date_like[:4])
+    # --- multi-skill platform adaptive tasks (planner-side suggestions) ---
+    # These are candidate suggestions; the executor still tier-gates them.
+    if len(numeric) >= 3 and any(
+        c.get("kind") == "numeric" for c in cols
+    ):
+        add("auto_segmentation",
+            "Cluster rows into segments with silhouette-selected k",
+            "Segments reveal natural groups the eye can't see in raw rows.",
+            numeric[:8])
+        add("multivariate_anomaly_detection",
+            "Find rows unusual in combination (Isolation Forest)",
+            "Per-column outliers miss multi-column anomalies; this catches them.",
+            numeric[:8])
+    if numeric and categorical:
+        add("feature_engineering_suggestions",
+            "Suggest log transforms, encodings and redundant-pair flags",
+            "Cheap, advisory guidance for the modelling step that may come next.",
+            numeric[:4] + categorical[:4])
+    if identifiers and date_like:
+        add("cohort_retention",
+            "Build a cohort retention matrix from identifier + date columns",
+            "Shows whether the same entities keep coming back over time.",
+            identifiers[:2] + date_like[:2])
+    if numeric and categorical:
+        add("group_significance_test",
+            "Test each numeric metric across two-value categories",
+            "A formal, effect-size-backed difference test for binary splits.",
+            numeric[:6] + categorical[:6])
+    if numeric and date_like:
+        add("forecast_metric",
+            "Forecast a date+numeric pair with ETS / seasonal-naive",
+            "A short-horizon outlook with a confidence interval.",
+            date_like[:2] + numeric[:2])
     if free_text:
         add("text_top_words", "Summarize free-text columns with word/ngram frequencies",
             "Free text is analyzed as text, not as thousands of categories.",

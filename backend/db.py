@@ -71,6 +71,24 @@ def decrement_credit(client: Client, user_id: str) -> None:
         logger.warning("decrement_credit failed for user=%s", user_id)
 
 
+def decrement_credits(client: Client, user_id: str, amount: int) -> None:
+    """Consume `amount` credits for a user-initiated skill (no-op at zero)."""
+    if amount <= 0:
+        return
+    try:
+        client.rpc("decrement_credits", {"uid": user_id, "amount": int(amount)}).execute()
+    except Exception:  # noqa: BLE001
+        logger.warning("decrement_credits failed for user=%s", user_id)
+
+
+def decrement_qa_credit(client: Client, user_id: str) -> None:
+    """Consume one Q&A credit (the separate, cheaper meter)."""
+    try:
+        client.rpc("decrement_qa_credit", {"uid": user_id}).execute()
+    except Exception:  # noqa: BLE001
+        logger.warning("decrement_qa_credit failed for user=%s", user_id)
+
+
 def set_credits(client: Client, user_id: str, credits: int) -> None:
     client.table("profiles").update({"credits": int(credits)}).eq(
         "id", user_id
@@ -273,6 +291,7 @@ def insert_report(
     sample_info_json: dict | None = None,
     analysis_mode: str | None = None,
     source_format: str | None = None,
+    column_glossary: dict | None = None,
 ) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "upload_id": upload_id,
@@ -289,6 +308,8 @@ def insert_report(
         payload["analysis_mode"] = analysis_mode
     if source_format is not None:
         payload["source_format"] = source_format
+    if column_glossary is not None:
+        payload["column_glossary"] = _jsonable(column_glossary)
     res = (
         client.table("reports")
         .insert(payload)
@@ -363,6 +384,130 @@ def set_report_export_urls(
         payload["cleaned_data_url"] = cleaned_data_url
     if payload:
         client.table("reports").update(payload).eq("id", report_id).execute()
+
+
+# ---------------------------------------------------------------------------
+# skill_runs (user-initiated skills #8-#15)
+# ---------------------------------------------------------------------------
+
+def insert_skill_run(
+    client: Client,
+    report_id: str,
+    user_id: str,
+    skill: str,
+    params_json: dict[str, Any] | None,
+    credit_cost: int,
+) -> dict[str, Any]:
+    """Create a skill run row in 'running' state."""
+    res = (
+        client.table("skill_runs")
+        .insert({
+            "report_id": report_id,
+            "user_id": user_id,
+            "skill": skill,
+            "params_json": _jsonable(params_json or {}),
+            "status": "running",
+            "credit_cost": int(credit_cost),
+        })
+        .execute()
+    )
+    return res.data[0]
+
+
+def finish_skill_run(
+    client: Client,
+    run_id: str,
+    result_json: dict[str, Any],
+    status: str = "done",
+) -> None:
+    """Persist a skill run's result. status: done | failed | skipped."""
+    client.table("skill_runs").update({
+        "status": status,
+        "result_json": _jsonable(result_json),
+    }).eq("id", run_id).execute()
+
+
+def get_completed_baseline(
+    client: Client,
+    report_id: str,
+    user_id: str,
+) -> dict[str, Any] | None:
+    """The most recent completed predictive_baseline run for a report.
+
+    Used to gate the what_if skill (#12): scenario scoring only runs against
+    an existing baseline for the same report.
+    """
+    res = (
+        client.table("skill_runs")
+        .select("id, skill, params_json, result_json, created_at")
+        .eq("report_id", report_id)
+        .eq("user_id", user_id)
+        .eq("skill", "predictive_baseline")
+        .eq("status", "done")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    rows = res.data
+    return rows[0] if rows else None
+
+
+def list_skill_runs(
+    client: Client, report_id: str, user_id: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """A report's skill-run history (own rows only)."""
+    res = (
+        client.table("skill_runs")
+        .select("*")
+        .eq("report_id", report_id)
+        .eq("user_id", user_id)
+        .order("created_at", desc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data
+
+
+# ---------------------------------------------------------------------------
+# qa_turns (#8)
+# ---------------------------------------------------------------------------
+
+def insert_qa_turn(
+    client: Client,
+    report_id: str,
+    user_id: str,
+    question: str,
+    answer: str,
+    answered: bool,
+) -> dict[str, Any]:
+    res = (
+        client.table("qa_turns")
+        .insert({
+            "report_id": report_id,
+            "user_id": user_id,
+            "question": question,
+            "answer": answer,
+            "answered": bool(answered),
+            "model": settings.openrouter_model,
+        })
+        .execute()
+    )
+    return res.data[0]
+
+
+def list_qa_turns(
+    client: Client, report_id: str, user_id: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    res = (
+        client.table("qa_turns")
+        .select("*")
+        .eq("report_id", report_id)
+        .eq("user_id", user_id)
+        .order("created_at", asc=True)
+        .limit(limit)
+        .execute()
+    )
+    return res.data
 
 
 # ---------------------------------------------------------------------------
