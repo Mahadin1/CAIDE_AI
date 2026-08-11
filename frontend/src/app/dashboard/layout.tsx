@@ -74,6 +74,9 @@ export default async function DashboardLayout({
               {PLAN_LABEL[plan] ?? "Free"}
               {typeof profile?.credits === "number" &&
                 ` · ${profile.credits} credits`}
+              {plan !== "free" &&
+                typeof profile?.qa_credits === "number" &&
+                ` · ${profile.qa_credits} Q&A`}
             </Badge>
             <Link
               href="/dashboard/account"

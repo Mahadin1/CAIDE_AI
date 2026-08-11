@@ -124,11 +124,11 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
           }}
         />
         <p className="text-xs text-muted">
-          {result.matched_pairs} matched pairs · treated={result.raw_rows_treated} · control={result.raw_rows_control}. Balance after matching should be well below the before value.
+          {fmt(result.matched_pairs, 0)} matched pairs · treated={fmt(result.raw_rows_treated, 0)} · control={fmt(result.raw_rows_control, 0)}. Balance after matching should be well below the before value.
         </p>
-        {result.caveat && typeof result.caveat === "object" && (
+        {result.caveat && typeof result.caveat === "object" ? (
           <PsmCaveat caveat={result.caveat as { text?: string; non_suppressible?: boolean }} />
-        )}
+        ) : null}
       </div>
     );
   }
@@ -138,7 +138,13 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
       | undefined;
     return (
       <div className="mt-3 space-y-3">
-        <MetricGrid metrics={result.metrics ?? result.holdout_metrics ?? {}} />
+        <MetricGrid
+          metrics={
+            (result.metrics as Record<string, unknown> | undefined) ??
+            (result.holdout_metrics as Record<string, unknown> | undefined) ??
+            {}
+          }
+        />
         {drivers && drivers.length > 0 && (
           <ol className="list-decimal space-y-1 pl-5 text-sm">
             {drivers.slice(0, 8).map((d) => (
@@ -165,7 +171,9 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
             predicted_class: target.predicted_class,
           }}
         />
-        {target.interval_note && <p className="mt-2 text-xs text-muted">{String(target.interval_note)}</p>}
+        {target.interval_note ? (
+          <p className="mt-2 text-xs text-muted">{String(target.interval_note)}</p>
+        ) : null}
       </div>
     );
   }
@@ -217,10 +225,12 @@ function ResultView({ result }: { result: Record<string, unknown> }) {
       <div className="mt-3 space-y-3">
         <p className="text-sm">{String(result.verdict)}</p>
         <div className="grid gap-3 sm:grid-cols-2">
-          {[
-            ["Analyzed file", l],
-            ["Second file", r],
-          ].map(([name, side]) => (
+          {(
+            [
+              ["Analyzed file", l],
+              ["Second file", r],
+            ] as [string, Record<string, Record<string, unknown>>][]
+          ).map(([name, side]) => (
             <div key={String(name)} className="rounded-md border border-border bg-elevated p-3">
               <p className="text-xs font-medium text-muted">{String(name)} ({String(side.key_column)})</p>
               <div className="mt-1 grid grid-cols-2 gap-1 text-sm">

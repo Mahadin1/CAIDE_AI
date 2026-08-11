@@ -20,7 +20,7 @@ export default async function DashboardPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, email, plan, credits, reports_this_month")
+    .select("id, email, plan, credits, qa_credits, reports_this_month")
     .single<Profile>();
 
   const { data: uploads } = await supabase
@@ -57,6 +57,9 @@ export default async function DashboardPage() {
             <p className="text-sm font-medium">
               {planLabel} plan — {credits} of {allowance} analysis credits left
               this month
+              {plan !== "free" && (
+                <> · {profile?.qa_credits ?? 0} Q&amp;A credits</>
+              )}
             </p>
             <p className="mt-1 text-sm text-muted">
               Each analysis uses one credit. Credits reset at the start of each

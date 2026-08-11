@@ -20,6 +20,7 @@ import type {
   CohortResult,
   FeatureEngineeringResult,
   ForecastResult,
+  ForecastResultEntry,
   GroupSignificanceResult,
   SegmentationResult,
   Summary,
@@ -159,7 +160,10 @@ function ForecastSection({
 }: {
   res: ForecastResult;
 }) {
-  const entries = Object.entries(res).filter(([k, v]) => k !== "_capped" && v && "history" in v);
+  const rawEntries = Object.entries(res);
+  const entries = rawEntries.filter(
+    ([k, v]) => k !== "_capped" && typeof v === "object" && v !== null && "history" in v
+  ) as [string, ForecastResultEntry][];
   if (entries.length === 0) return null;
   return (
     <SectionCard

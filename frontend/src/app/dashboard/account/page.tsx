@@ -27,7 +27,7 @@ export default async function AccountPage() {
 
   const { data: profile } = await supabase
     .from("profiles")
-    .select("id, email, name, plan, credits")
+    .select("id, email, name, plan, credits, qa_credits")
     .eq("id", user.id)
     .single<Profile>();
 
@@ -48,6 +48,9 @@ export default async function AccountPage() {
             {PLAN_LABEL[plan] ?? "Free"} plan
             {typeof profile?.credits === "number" &&
               ` · ${profile.credits} credits left this month`}
+            {plan !== "free" &&
+              typeof profile?.qa_credits === "number" &&
+              ` · ${profile.qa_credits} Q&A credits`}
           </Badge>
         </div>
         <p className="mt-1 text-muted">Signed in as {profile?.email ?? user.email}</p>

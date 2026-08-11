@@ -21,7 +21,12 @@ const TIERS: {
     price: 5,
     credits: 30,
     blurb: "For occasional analyses",
-    features: ["30 analyses per month", "Full EDA report + charts", "PDF & CSV exports"],
+    features: [
+      "30 analyses per month",
+      "Full EDA report + charts",
+      "Segmentation, forecasting & group tests",
+      "PDF & CSV exports",
+    ],
   },
   {
     id: "pro",
@@ -29,7 +34,13 @@ const TIERS: {
     price: 15,
     credits: 100,
     blurb: "For regular data work",
-    features: ["100 analyses per month", "Everything in Starter", "Priority processing"],
+    features: [
+      "100 analyses per month",
+      "Everything in Starter",
+      "Advanced skills (baseline, PSM, what-if…) charged per run",
+      "300 live Q&A credits",
+      "Priority processing",
+    ],
   },
   {
     id: "scale",
@@ -37,7 +48,12 @@ const TIERS: {
     price: 30,
     credits: 300,
     blurb: "For teams and heavy use",
-    features: ["300 analyses per month", "Everything in Pro", "Best value per analysis"],
+    features: [
+      "300 analyses per month",
+      "Everything in Pro",
+      "1,000 live Q&A credits",
+      "Best value per analysis",
+    ],
   },
 ];
 
