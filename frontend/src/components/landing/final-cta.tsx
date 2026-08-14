@@ -11,7 +11,7 @@ export function FinalCta() {
             Your next dataset has a story. Let us read it.
           </h2>
           <p className="mt-4 max-w-xl text-muted">
-            Free accounts get two full analyses every month. No credit card, no
+            Free accounts get three analyses every month. No credit card, no
             spreadsheet gymnastics.
           </p>
           <div className="mt-8">

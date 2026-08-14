@@ -138,7 +138,7 @@ export function FileAnalyze({ upload }: { upload: Upload }) {
         method: "DELETE",
       });
       if (res.ok) {
-        router.push("/dashboard");
+        router.push("/dashboard/files");
         router.refresh();
       } else {
         const data = await res.json().catch(() => ({}));

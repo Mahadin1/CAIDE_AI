@@ -7,59 +7,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { createClient } from "@/lib/supabase/client";
+import { SKILLS, SKILL_ORDER } from "@/lib/skills";
 import type { SkillRun, Summary, UserSkill } from "@/lib/types";
-
-const SKILLS: Record<
-  UserSkill,
-  { label: string; cost: number; description: string; needsBaseline?: boolean }
-> = {
-  predictive_baseline: {
-    label: "Predictive baseline",
-    cost: 10,
-    description: "Honest baseline model for a target you choose — holdout metrics + permutation importance.",
-  },
-  psm: {
-    label: "Treatment comparison (PSM)",
-    cost: 15,
-    description: "Propensity-score matched association between a treatment and an outcome. Association only, with a mandatory caveat.",
-  },
-  key_driver: {
-    label: "Key drivers",
-    cost: 8,
-    description: "Rank the columns most strongly associated with an outcome, validated on a holdout set.",
-  },
-  what_if: {
-    label: "What-if simulator",
-    cost: 3,
-    description: "Predict an outcome for hypothetical values. Requires a completed predictive baseline first.",
-    needsBaseline: true,
-  },
-  segment_comparison: {
-    label: "Segment comparison",
-    cost: 5,
-    description: "Formally compare two segments you define, with significance + effect size.",
-  },
-  decompose: {
-    label: "Metric change decomposition",
-    cost: 8,
-    description: "Split a metric's change between two periods into mix shift vs within-segment contribution.",
-  },
-  join_quality: {
-    label: "Join quality check",
-    cost: 5,
-    description: "Attach a second file and check match rate, duplicate keys and orphaned rows before merging.",
-  },
-};
-
-const SKILL_ORDER: UserSkill[] = [
-  "predictive_baseline",
-  "psm",
-  "key_driver",
-  "what_if",
-  "segment_comparison",
-  "decompose",
-  "join_quality",
-];
 
 function fmt(x: unknown, nd = 2): string {
   if (typeof x !== "number" || Number.isNaN(x)) return "—";

@@ -40,10 +40,10 @@ export default async function FilePage({
     <div className="space-y-8">
       <div>
         <Link
-          href="/dashboard"
+          href="/dashboard/files"
           className="inline-flex items-center gap-1 text-sm text-muted hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" /> Dashboard
+          <ArrowLeft className="h-4 w-4" /> Files
         </Link>
         <div className="mt-4 flex items-center gap-3">
           <FileText className="h-6 w-6 text-muted" />

@@ -17,10 +17,10 @@ import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RelativeTime } from "@/components/relative-time";
-import { RowMenu } from "@/components/dashboard/row-menu";
+import { RowMenu, type RowMenuItem } from "@/components/dashboard/row-menu";
 import type { JobStatus, Upload } from "@/lib/types";
 
-const statusMeta: Record<
+export const statusMeta: Record<
   Upload["status"],
   { label: string; variant: "success" | "info" | "warning" | "danger" | "secondary" }
 > = {
@@ -34,9 +34,13 @@ const statusMeta: Record<
 export function UploadRow({
   upload,
   onStatusChange,
+  href,
+  extraMenuItems,
 }: {
   upload: Upload;
   onStatusChange?: (id: string, status: Upload["status"] | "deleted") => void;
+  href?: string;
+  extraMenuItems?: RowMenuItem[];
 }) {
   const [live, setLive] = useState<JobStatus | null>(null);
   const [retrying, setRetrying] = useState(false);
@@ -136,7 +140,16 @@ export function UploadRow({
           <FileText className="h-5 w-5 shrink-0 text-muted" />
         )}
         <div className="min-w-0">
-          <p className="truncate text-sm font-medium">{upload.filename}</p>
+          {href && status === "ready" ? (
+            <Link
+              href={href}
+              className="block truncate text-sm font-medium transition-colors hover:text-accent"
+            >
+              {upload.filename}
+            </Link>
+          ) : (
+            <p className="truncate text-sm font-medium">{upload.filename}</p>
+          )}
           <p className="text-xs text-muted">
             <RelativeTime date={upload.created_at} />
           </p>
@@ -193,6 +206,7 @@ export function UploadRow({
           <RowMenu
             ariaLabel={`Options for ${upload.filename}`}
             items={[
+              ...(extraMenuItems ?? []),
               ...(status === "done" && reportId
                 ? [
                     {

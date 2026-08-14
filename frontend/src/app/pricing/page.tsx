@@ -1,18 +1,20 @@
 import { SiteNav } from "@/components/site-nav";
 import { Footer } from "@/components/footer";
-import { Hero } from "@/components/landing/hero";
-import { HowItWorks } from "@/components/landing/how-it-works";
-import { Features } from "@/components/landing/features";
+import { PricingSection } from "@/components/landing/pricing";
+import { PricingFaq } from "@/components/landing/pricing-faq";
 import { FinalCta } from "@/components/landing/final-cta";
 
-export default function Home() {
+export const metadata = {
+  title: "Pricing",
+};
+
+export default function PricingPage() {
   return (
     <>
       <SiteNav />
       <main>
-        <Hero />
-        <HowItWorks />
-        <Features />
+        <PricingSection />
+        <PricingFaq />
         <FinalCta />
       </main>
       <Footer />

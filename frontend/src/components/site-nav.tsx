@@ -21,7 +21,13 @@ export async function SiteNav() {
             How it works
           </Link>
           <Link
-            href="/#pricing"
+            href="/features"
+            className="hidden text-sm text-muted transition-colors hover:text-foreground sm:block"
+          >
+            Features
+          </Link>
+          <Link
+            href="/pricing"
             className="hidden text-sm text-muted transition-colors hover:text-foreground sm:block"
           >
             Pricing

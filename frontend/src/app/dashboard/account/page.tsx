@@ -1,11 +1,9 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { ArrowLeft, CreditCard } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 import { createClient } from "@/lib/supabase/server";
 import { ProfileInfo } from "@/components/account/profile-info";
-import { PlanPicker } from "@/components/account/plan-picker";
 import { AccountForm } from "@/components/account/account-form";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { Profile } from "@/lib/types";
 
@@ -40,7 +38,7 @@ export default async function AccountPage() {
           href="/dashboard"
           className="inline-flex items-center gap-1 text-sm text-muted hover:text-foreground"
         >
-          <ArrowLeft className="h-4 w-4" /> Dashboard
+          <ArrowLeft className="h-4 w-4" /> Overview
         </Link>
         <div className="mt-4 flex flex-wrap items-center gap-3">
           <h1 className="text-3xl font-medium">Account</h1>
@@ -57,24 +55,6 @@ export default async function AccountPage() {
       </div>
 
       <ProfileInfo initialName={profile?.name ?? null} email={profile?.email ?? user.email ?? ""} />
-
-      {/* Subscription */}
-      <section>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <CreditCard className="h-4 w-4" /> Subscription
-            </CardTitle>
-            <CardDescription>
-              Credits are per-month and reset monthly. Change your plan anytime —
-              the new allowance applies immediately.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <PlanPicker currentPlan={plan} />
-          </CardContent>
-        </Card>
-      </section>
 
       {/* Security */}
       <AccountForm email={profile?.email ?? user.email ?? ""} />
