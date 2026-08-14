@@ -503,7 +503,7 @@ def list_qa_turns(
         .select("*")
         .eq("report_id", report_id)
         .eq("user_id", user_id)
-        .order("created_at", asc=True)
+        .order("created_at", desc=False)
         .limit(limit)
         .execute()
     )

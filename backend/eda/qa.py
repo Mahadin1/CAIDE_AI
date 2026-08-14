@@ -89,8 +89,11 @@ def _digest(report: dict[str, Any]) -> str:
         },
         "missing_patterns": {
             "missing": summary.get("missing_patterns", {}).get("missing"),
-            "co_missing": (summary.get("missing_patterns", {}).get("co_missing")
-                           or [])[:4],
+            "co_missing": [
+                {"pair": k, **v}
+                for k, v in list((summary.get("missing_patterns", {})
+                                  .get("co_missing") or {}).items())[:4]
+            ],
         },
         "column_glossary": report.get("column_glossary"),
         "narrative": (report.get("narrative") or "")[:4000],
