@@ -293,8 +293,8 @@ export function UploadFlow({ disabled = false }: { disabled?: boolean }) {
       )}
 
       {error && (
-        <div className="rounded-md border border-[#3a1a1a] bg-[#3a1a1a]/40 p-4">
-          <p className="text-sm text-[#f87171]">{error.message}</p>
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-4">
+          <p className="text-sm text-[var(--danger-fg)]">{error.message}</p>
         </div>
       )}
     </div>

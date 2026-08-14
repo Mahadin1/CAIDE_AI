@@ -120,7 +120,7 @@ export function AccountForm({ email }: { email: string }) {
                 required
               />
             </div>
-            {pwError && <p className="text-sm text-[#f87171]">{pwError}</p>}
+            {pwError && <p className="text-sm text-[var(--danger-fg)]">{pwError}</p>}
             {pwSuccess && (
               <p className="text-sm text-foreground">Password updated.</p>
             )}
@@ -132,9 +132,9 @@ export function AccountForm({ email }: { email: string }) {
         </CardContent>
       </Card>
 
-      <Card className="border-[#3a1a1a]">
+      <Card className="border-[var(--danger-border)]">
         <CardHeader>
-          <CardTitle className="flex items-center gap-2 text-[#f87171]">
+          <CardTitle className="flex items-center gap-2 text-[var(--danger-fg)]">
             <AlertTriangle className="h-4 w-4" /> Delete account
           </CardTitle>
           <CardDescription>
@@ -163,13 +163,13 @@ export function AccountForm({ email }: { email: string }) {
                   placeholder={email}
                 />
               </div>
-              {delError && <p className="text-sm text-[#f87171]">{delError}</p>}
+              {delError && <p className="text-sm text-[var(--danger-fg)]">{delError}</p>}
               <div className="flex gap-2">
                 <Button
                   type="submit"
                   variant="outline"
                   disabled={delLoading || deleteConfirm !== email}
-                  className="text-[#f87171]"
+                  className="text-[var(--danger-fg)]"
                 >
                   {delLoading && <Loader2 className="h-4 w-4 animate-spin" />}
                   Permanently delete

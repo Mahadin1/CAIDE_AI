@@ -110,8 +110,8 @@ export function ReportQa({
         )}
 
         {error && (
-          <div className="mb-3 rounded-md border border-[#3a1a1a] bg-[#3a1a1a]/40 p-3">
-            <p className="text-sm text-[#f87171]">{error}</p>
+          <div className="mb-3 rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3">
+            <p className="text-sm text-[var(--danger-fg)]">{error}</p>
           </div>
         )}
 

@@ -130,7 +130,7 @@ export function UploadRow({
     <div
       className={cn(
         "card-panel flex items-center justify-between gap-4 p-4",
-        status === "failed" && "border-[#3a1a1a]"
+        status === "failed" && "border-[var(--danger-border)]"
       )}
     >
       <div className="flex min-w-0 items-center gap-3">
@@ -160,7 +160,7 @@ export function UploadRow({
             </p>
           )}
           {status === "failed" && errorMessage && (
-            <p className="mt-0.5 text-xs text-[#f87171]">{errorMessage}</p>
+            <p className="mt-0.5 text-xs text-[var(--danger-fg)]">{errorMessage}</p>
           )}
         </div>
       </div>

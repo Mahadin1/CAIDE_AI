@@ -21,9 +21,29 @@
   --color-accent-foreground: #ffffff;
 
   --radius: 0.5rem;
+
+  /* Semantic state colors (danger/warning/success) — theme-aware pairs. */
+  --danger-bg: #2a0a0a;
+  --danger-border: #3a1a1a;
+  --danger-fg: #f87171;
+  --warning-bg: #1a160c;
+  --warning-border: #3a3320;
+  --warning-fg: #facc15;
+  --success-bg: #16351f;
+  --success-border: #1f4a2d;
+  --success-fg: #4ade80;
 }
 
 :root.light {
+  --danger-bg: #fef2f2;
+  --danger-border: #fecaca;
+  --danger-fg: #dc2626;
+  --warning-bg: #fffbeb;
+  --warning-border: #fde68a;
+  --warning-fg: #b45309;
+  --success-bg: #f0fdf4;
+  --success-border: #bbf7d0;
+  --success-fg: #15803d;
   --color-bg-primary: #ffffff;
   --color-bg-secondary: #f5f5f7;
   --color-elevated: #ffffff;
@@ -83,6 +103,31 @@
   ::selection {
     background-color: hsl(var(--accent) / 0.85);
     color: hsl(var(--accent-foreground));
+  }
+
+  /* Slim, theme-aware scrollbars (Firefox + WebKit). */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  *::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  *::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  *::-webkit-scrollbar-thumb {
+    background-color: hsl(var(--border));
+    border-radius: 9999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  *::-webkit-scrollbar-thumb:hover {
+    background-color: hsl(var(--muted) / 0.55);
+  }
+  *::-webkit-scrollbar-corner {
+    background: transparent;
   }
 }
 

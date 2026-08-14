@@ -60,7 +60,7 @@ export function RowMenu({
       {open && (
         <div
           role="menu"
-          className="absolute right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-md border border-border bg-[#0d0d0d] p-1 shadow-xl"
+          className="absolute right-0 z-30 mt-1 min-w-44 overflow-hidden rounded-md border border-border bg-elevated p-1 shadow-xl"
         >
           {items.map((item, i) =>
             item.href ? (
@@ -73,7 +73,7 @@ export function RowMenu({
                 className={cn(
                   "flex items-center gap-2 rounded px-2.5 py-1.5 text-sm transition-colors",
                   item.danger
-                    ? "text-[#f87171] hover:bg-[#3a1a1a]"
+                    ? "text-[var(--danger-fg)] hover:bg-[var(--danger-border)]"
                     : "text-foreground hover:bg-border"
                 )}
               >
@@ -92,7 +92,7 @@ export function RowMenu({
                 className={cn(
                   "flex w-full items-center gap-2 rounded px-2.5 py-1.5 text-left text-sm transition-colors",
                   item.danger
-                    ? "text-[#f87171] hover:bg-[#3a1a1a]"
+                    ? "text-[var(--danger-fg)] hover:bg-[var(--danger-border)]"
                     : "text-foreground hover:bg-border"
                 )}
               >

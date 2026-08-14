@@ -2,8 +2,8 @@ import { Badge } from "@/components/ui/badge";
 import type { ReportFinding } from "@/lib/types";
 
 const severityStyles: Record<string, string> = {
-  high: "border-[#3a1a1a] bg-[#1a0a0a]",
-  medium: "border-[#3a3320] bg-[#1a160c]",
+  high: "border-[var(--danger-border)] bg-[var(--danger-bg)]",
+  medium: "border-[var(--warning-border)] bg-[var(--warning-bg)]",
   low: "border-border bg-elevated",
   info: "border-border bg-elevated",
 };

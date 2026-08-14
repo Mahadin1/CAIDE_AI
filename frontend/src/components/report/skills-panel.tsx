@@ -40,11 +40,11 @@ function MetricGrid({ metrics }: { metrics: Record<string, unknown> }) {
 
 function PsmCaveat({ caveat }: { caveat: { text?: string; non_suppressible?: boolean } }) {
   return (
-    <div className="mt-3 rounded-md border-2 border-[#f87171]/60 bg-[#2a0a0a] p-4" data-testid="psm-caveat">
+    <div className="mt-3 rounded-md border-2 border-[var(--danger-border)] bg-[var(--danger-bg)] p-4" data-testid="psm-caveat">
       <div className="flex items-start gap-2">
-        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[#f87171]" />
+        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-[var(--danger-fg)]" />
         <div>
-          <p className="text-sm font-medium text-[#f87171]">
+          <p className="text-sm font-medium text-[var(--danger-fg)]">
             This is an association, not proof of causation
           </p>
           <p className="mt-1 text-xs text-muted">{caveat.text}</p>
@@ -333,8 +333,8 @@ export function SkillsPanel({
         })}
 
         {error && (
-          <div className="rounded-md border border-[#3a1a1a] bg-[#3a1a1a]/40 p-3">
-            <p className="text-sm text-[#f87171]">{error}</p>
+          <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-3">
+            <p className="text-sm text-[var(--danger-fg)]">{error}</p>
           </div>
         )}
 

@@ -149,7 +149,7 @@ export function OverviewContent({
                 <Link
                   key={upload.id}
                   href={`/dashboard/reports/${reportId}`}
-                  className="card-panel group flex items-center justify-between gap-4 p-4 transition-colors hover:border-[#3a3a3a]"
+                  className="card-panel group flex items-center justify-between gap-4 p-4 transition-colors hover:border-border"
                 >
                   <div className="flex min-w-0 items-center gap-3">
                     <FileBarChart className="h-5 w-5 shrink-0 text-muted" />

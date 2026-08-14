@@ -18,6 +18,7 @@ import {
 } from "recharts";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { RowDrilldown } from "@/components/report/row-drilldown";
+import { useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type {
   CategoricalAssociationEntry,
   GroupComparisonEntry,
@@ -25,9 +26,6 @@ import type {
   Summary,
   TimeTrendEntry,
 } from "@/lib/types";
-const ACCENT = "#fafafa";
-const MUTED = "#3a3a3a";
-const GRID = "#1f1f1f";
 
 // Mirrors the thresholds of the same name in agent.py's select_findings /
 // pdf.py, so a chart only appears here when the narrative also considers
@@ -36,11 +34,13 @@ const GROUP_DIFFERENCE_MIN_EFFECT = 0.5;
 const CRAMERS_V_ASSOCIATION_THRESHOLD = 0.3;
 const TREND_CORR_THRESHOLD = 0.5;
 
-const TOOLTIP_STYLE = {
-  backgroundColor: "#0a0a0a",
-  border: "1px solid #1f1f1f",
-  borderRadius: 8,
-};
+function tooltipStyle(theme: ChartTheme) {
+  return {
+    backgroundColor: theme.background,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 8,
+  };
+}
 
 function fmtNum(x: number): string {
   const ax = Math.abs(x);
@@ -49,18 +49,19 @@ function fmtNum(x: number): string {
   return x.toPrecision(3);
 }
 
-function heatColor(r: number): string {
+function heatColor(accent: string, r: number): string {
   const a = Math.min(1, Math.abs(r));
   // accent with alpha — only used for chart highlights
   const hex = Math.round(a * 255)
     .toString(16)
     .padStart(2, "0");
-  return `${ACCENT}${hex}`;
+  return `${accent}${hex}`;
 }
 /* ------------------------------------------------------------------ */
 /* Missing values bar chart                                            */
 /* ------------------------------------------------------------------ */
 function MissingValuesChart({ summary }: { summary: Summary }) {
+  const theme = useChartTheme();
   const data = Object.entries(summary.missing_pct)
     .map(([column, pct]) => ({ column, pct: Math.round(pct * 10) / 10 }))
     .filter((d) => d.pct > 0)
@@ -76,13 +77,20 @@ function MissingValuesChart({ summary }: { summary: Summary }) {
       <CardContent className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="column" tick={{ fill: "#888888", fontSize: 11 }} />
-            <YAxis unit="%" tick={{ fill: "#888888", fontSize: 11 }} />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="column" tick={{ fill: theme.ticks, fontSize: 11 }} />
+            <YAxis unit="%" tick={{ fill: theme.ticks, fontSize: 11 }} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
             <Bar dataKey="pct" radius={[3, 3, 0, 0]}>
-              {data.map((d) => (
-                <Cell key={d.column} fill={d.pct > 20 ? ACCENT : MUTED} />
+              {data.map((d, i) => (
+                <Cell
+                  key={d.column}
+                  fill={
+                    d.pct > 20
+                      ? theme.accentStrong
+                      : theme.palette[i % theme.palette.length]
+                  }
+                />
               ))}
             </Bar>
           </BarChart>
@@ -96,6 +104,7 @@ function MissingValuesChart({ summary }: { summary: Summary }) {
 /* Correlation heatmap (grid, |r| -> accent intensity)                 */
 /* ------------------------------------------------------------------ */
 function CorrelationHeatmap({ summary }: { summary: Summary }) {
+  const theme = useChartTheme();
   const corr = summary.correlations;
   const cols = Object.keys(corr);
   return (
@@ -132,8 +141,9 @@ function CorrelationHeatmap({ summary }: { summary: Summary }) {
                         title={`${a} vs ${b}: ${r ?? "n/a"}`}
                         className="flex h-10 items-center justify-center rounded text-xs"
                         style={{
-                          backgroundColor: r == null ? "#0a0a0a" : heatColor(r as number),
-                          color: r != null && Math.abs(r) > 0.5 ? "#000000" : "#FAFAFA",
+                          backgroundColor:
+                            r == null ? theme.background : heatColor(theme.accent, r as number),
+                          color: theme.onAccent,
                         }}
                       >
                         {r != null ? Math.round(r * 100) / 100 : "—"}
@@ -165,6 +175,7 @@ function OutlierScatter({
   const points = sample.map((v, i) => ({ i, value: v }));
   const low = info.low_bound;
   const high = info.high_bound;
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -177,23 +188,23 @@ function OutlierScatter({
       <CardContent className="h-64">
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 8, right: 12, left: -8, bottom: 0 }}>
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" />
-            <XAxis type="number" dataKey="i" name="index" tick={{ fill: "#888888", fontSize: 10 }} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" />
+            <XAxis type="number" dataKey="i" name="index" tick={{ fill: theme.ticks, fontSize: 10 }} />
             <YAxis
               type="number"
               dataKey="value"
               name="value"
-              tick={{ fill: "#888888", fontSize: 10 }}
+              tick={{ fill: theme.ticks, fontSize: 10 }}
             />
             <ZAxis range={[40, 40]} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <Tooltip contentStyle={tooltipStyle(theme)} />
             {low != null && high != null && (
               <ReferenceArea
                 y1={low}
                 y2={high}
-                fill={ACCENT}
+                fill={theme.accent}
                 fillOpacity={0.08}
-                stroke={ACCENT}
+                stroke={theme.accent}
                 strokeOpacity={0.2}
               />
             )}
@@ -203,8 +214,8 @@ function OutlierScatter({
                   key={idx}
                   fill={
                     low != null && high != null && (p.value < low || p.value > high)
-                      ? ACCENT
-                      : MUTED
+                      ? theme.accentStrong
+                      : theme.muted
                   }
                 />
               ))}
@@ -231,6 +242,7 @@ function CategoricalChart({
     value: t.value,
     share: Math.round(t.share * 1000) / 10,
   }));
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -247,24 +259,31 @@ function CategoricalChart({
             layout="vertical"
             margin={{ top: 4, right: 16, left: 8, bottom: 0 }}
           >
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" unit="%" tick={{ fill: "#888888", fontSize: 11 }} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" unit="%" tick={{ fill: theme.ticks, fontSize: 11 }} />
             <YAxis
               type="category"
               dataKey="value"
               width={96}
-              tick={{ fill: "#888888", fontSize: 11 }}
+              tick={{ fill: theme.ticks, fontSize: 11 }}
             />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
             <Bar
               dataKey="share"
-              fill={ACCENT}
+              fill={theme.accent}
               radius={[0, 3, 3, 0]}
               className="cursor-pointer"
               onClick={(entry) => onDrill(column, String((entry as { value: unknown }).value), `Distribution of “${column}”`)}
             >
-              {data.map((d) => (
-                <Cell key={d.value} fill={d.share > 90 ? ACCENT : MUTED} />
+              {data.map((d, i) => (
+                <Cell
+                  key={d.value}
+                  fill={
+                    d.share > 90
+                      ? theme.accentStrong
+                      : theme.palette[i % theme.palette.length]
+                  }
+                />
               ))}
             </Bar>
           </BarChart>
@@ -290,6 +309,7 @@ function HistogramChart({
     range: `${fmtNum(hist.bin_edges[i])}–${fmtNum(hist.bin_edges[i + 1])}`,
     count,
   }));
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -303,17 +323,17 @@ function HistogramChart({
       <CardContent className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 24 }}>
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
             <XAxis
               dataKey="range"
-              tick={{ fill: "#888888", fontSize: 9 }}
+              tick={{ fill: theme.ticks, fontSize: 9 }}
               angle={-30}
               textAnchor="end"
               height={40}
             />
-            <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="count" fill={ACCENT} radius={[3, 3, 0, 0]} />
+            <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} allowDecimals={false} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
+            <Bar dataKey="count" fill={theme.accent} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </CardContent>
@@ -332,6 +352,7 @@ function GroupComparisonChart({
   onDrill: (column: string, value: string, title: string) => void;
 }) {
   const data = entry.groups.map((g) => ({ group: g.group, mean: g.mean }));
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -346,13 +367,12 @@ function GroupComparisonChart({
       <CardContent className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="group" tick={{ fill: "#888888", fontSize: 11 }} />
-            <YAxis tick={{ fill: "#888888", fontSize: 11 }} />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="group" tick={{ fill: theme.ticks, fontSize: 11 }} />
+            <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
             <Bar
               dataKey="mean"
-              fill={ACCENT}
               radius={[3, 3, 0, 0]}
               className="cursor-pointer"
               onClick={(bar) =>
@@ -362,7 +382,11 @@ function GroupComparisonChart({
                   `Average “${entry.numeric_column}” by “${entry.category_column}”`
                 )
               }
-            />
+            >
+              {data.map((d, i) => (
+                <Cell key={d.group} fill={theme.palette[i % theme.palette.length]} />
+              ))}
+            </Bar>
           </BarChart>
         </ResponsiveContainer>
       </CardContent>
@@ -378,6 +402,7 @@ function CategoricalAssociationChart({ entries }: { entries: CategoricalAssociat
     pair: `${e.column_a} × ${e.column_b}`,
     v: Math.round(e.cramers_v * 100),
   }));
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -394,18 +419,25 @@ function CategoricalAssociationChart({ entries }: { entries: CategoricalAssociat
             layout="vertical"
             margin={{ top: 4, right: 16, left: 8, bottom: 0 }}
           >
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
-            <XAxis type="number" domain={[0, 100]} tick={{ fill: "#888888", fontSize: 11 }} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" horizontal={false} />
+            <XAxis type="number" domain={[0, 100]} tick={{ fill: theme.ticks, fontSize: 11 }} />
             <YAxis
               type="category"
               dataKey="pair"
               width={140}
-              tick={{ fill: "#888888", fontSize: 11 }}
+              tick={{ fill: theme.ticks, fontSize: 11 }}
             />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
-            <Bar dataKey="v" fill={ACCENT} radius={[0, 3, 3, 0]}>
-              {data.map((d) => (
-                <Cell key={d.pair} fill={d.v >= 70 ? ACCENT : MUTED} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
+            <Bar dataKey="v" radius={[0, 3, 3, 0]}>
+              {data.map((d, i) => (
+                <Cell
+                  key={d.pair}
+                  fill={
+                    d.v >= 70
+                      ? theme.accentStrong
+                      : theme.palette[i % theme.palette.length]
+                  }
+                />
               ))}
             </Bar>
           </BarChart>
@@ -419,6 +451,7 @@ function CategoricalAssociationChart({ entries }: { entries: CategoricalAssociat
 /* Time trend — row count per period for a date-like column            */
 /* ------------------------------------------------------------------ */
 function TimeTrendChart({ column, trend }: { column: string; trend: TimeTrendEntry }) {
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -430,14 +463,14 @@ function TimeTrendChart({ column, trend }: { column: string; trend: TimeTrendEnt
       <CardContent className="h-72">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={trend.series} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="period" tick={{ fill: "#888888", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
-            <Tooltip contentStyle={TOOLTIP_STYLE} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="period" tick={{ fill: theme.ticks, fontSize: 10 }} />
+            <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} allowDecimals={false} />
+            <Tooltip contentStyle={tooltipStyle(theme)} />
             <Line
               type="monotone"
               dataKey="count"
-              stroke={ACCENT}
+              stroke={theme.accent}
               strokeWidth={2}
               dot={false}
             />
@@ -456,6 +489,7 @@ function CorrelationBarChart({ pairs }: { pairs: { a: string; b: string; r: numb
     pair: `${c.a} × ${c.b}`,
     r: Math.round(c.r * 1000) / 10,
   }));
+  const theme = useChartTheme();
   return (
     <Card>
       <CardHeader>
@@ -472,22 +506,31 @@ function CorrelationBarChart({ pairs }: { pairs: { a: string; b: string; r: numb
             layout="vertical"
             margin={{ top: 4, right: 24, left: 8, bottom: 0 }}
           >
-            <CartesianGrid stroke={GRID} strokeDasharray="3 3" horizontal={false} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" horizontal={false} />
             <XAxis
               type="number"
               domain={[-100, 100]}
-              tick={{ fill: "#888888", fontSize: 11 }}
+              tick={{ fill: theme.ticks, fontSize: 11 }}
             />
             <YAxis
               type="category"
               dataKey="pair"
               width={140}
-              tick={{ fill: "#888888", fontSize: 11 }}
+              tick={{ fill: theme.ticks, fontSize: 11 }}
             />
-            <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+            <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
             <Bar dataKey="r" radius={[0, 3, 3, 0]}>
               {data.map((d) => (
-                <Cell key={d.pair} fill={Math.abs(d.r) >= 70 ? ACCENT : MUTED} />
+                <Cell
+                  key={d.pair}
+                  fill={
+                    Math.abs(d.r) >= 70
+                      ? d.r >= 0
+                        ? theme.accentStrong
+                        : theme.palette[2]
+                      : theme.muted
+                  }
+                />
               ))}
             </Bar>
           </BarChart>

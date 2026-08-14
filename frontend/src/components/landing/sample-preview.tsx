@@ -8,6 +8,7 @@ import {
   ResponsiveContainer,
   CartesianGrid,
 } from "recharts";
+import { useChartTheme } from "@/lib/chart-theme";
 
 /**
  * Static mock of the "report card" visual shown in the hero.
@@ -23,6 +24,7 @@ const missingData = [
 ];
 
 export function SampleReportPreview() {
+  const theme = useChartTheme();
   return (
     <div className="card-panel w-full max-w-md p-6 shadow-2xl">
       <div className="flex items-center justify-between">
@@ -35,10 +37,10 @@ export function SampleReportPreview() {
       <div className="mt-5 h-40 w-full">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={missingData} margin={{ top: 4, right: 4, left: -18, bottom: 0 }}>
-            <CartesianGrid stroke="#1f1f1f" strokeDasharray="3 3" vertical={false} />
-            <XAxis dataKey="column" tick={{ fill: "#888888", fontSize: 10 }} />
-            <YAxis tick={{ fill: "#888888", fontSize: 10 }} unit="%" />
-            <Bar dataKey="pct" fill="#FAFAFA" radius={[3, 3, 0, 0]} />
+            <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+            <XAxis dataKey="column" tick={{ fill: theme.ticks, fontSize: 10 }} />
+            <YAxis tick={{ fill: theme.ticks, fontSize: 10 }} unit="%" />
+            <Bar dataKey="pct" fill={theme.accent} radius={[3, 3, 0, 0]} />
           </BarChart>
         </ResponsiveContainer>
       </div>

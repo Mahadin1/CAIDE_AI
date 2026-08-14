@@ -199,7 +199,7 @@ const Sidebar = React.forwardRef<
       data-sidebar="sidebar"
       data-state={state}
       className={cn(
-        "relative hidden h-svh shrink-0 bg-surface transition-[width] duration-200 group-data-[state=collapsed]/sidebar-wrapper:duration-200 md:flex",
+        "sticky top-0 hidden h-svh shrink-0 bg-surface transition-[width] duration-200 group-data-[state=collapsed]/sidebar-wrapper:duration-200 md:flex",
         state === "expanded"
           ? "w-[--sidebar-width]"
           : "w-[--sidebar-width-icon]",

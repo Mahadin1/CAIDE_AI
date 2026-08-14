@@ -153,7 +153,7 @@ export function FileAnalyze({ upload }: { upload: Upload }) {
     return (
       <div className="space-y-4">
         <PlanPreview plan={plan} onStart={startAnalysis} onBack={() => setPhase("idle")} />
-        {error && <p className="text-sm text-[#f87171]">{error}</p>}
+        {error && <p className="text-sm text-[var(--danger-fg)]">{error}</p>}
       </div>
     );
   }
@@ -201,7 +201,7 @@ export function FileAnalyze({ upload }: { upload: Upload }) {
 
       {phase === "failed" && (
         <div className="card-panel p-6">
-          <p className="text-sm font-medium text-[#f87171]">The analysis failed</p>
+          <p className="text-sm font-medium text-[var(--danger-fg)]">The analysis failed</p>
           {error && <p className="mt-1 text-sm text-muted">{error}</p>}
           <div className="mt-4 flex items-center gap-2">
             <Button size="sm" onClick={() => startAnalysis(overridesRef.current)}>
@@ -215,8 +215,8 @@ export function FileAnalyze({ upload }: { upload: Upload }) {
       )}
 
       {error && phase !== "failed" && (
-        <div className="rounded-md border border-[#3a1a1a] bg-[#3a1a1a]/40 p-4">
-          <p className="text-sm text-[#f87171]">{error}</p>
+        <div className="rounded-md border border-[var(--danger-border)] bg-[var(--danger-bg)] p-4">
+          <p className="text-sm text-[var(--danger-fg)]">{error}</p>
           {error.includes("credits") && (
             <Button asChild size="sm" variant="secondary" className="mt-3">
               <a href="/dashboard/account">Manage plan</a>

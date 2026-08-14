@@ -100,7 +100,7 @@ export function ProfileInfo({
                 Your email is your sign-in and can't be changed here.
               </p>
             </div>
-            {error && <p className="text-sm text-[#f87171]">{error}</p>}
+            {error && <p className="text-sm text-[var(--danger-fg)]">{error}</p>}
             {saved && <p className="text-sm text-foreground">Saved.</p>}
             <Button type="submit" disabled={saving}>
               {saving && <Loader2 className="h-4 w-4 animate-spin" />}

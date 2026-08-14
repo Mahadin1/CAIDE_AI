@@ -15,6 +15,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { RowDrilldown } from "@/components/report/row-drilldown";
+import { useChartTheme, type ChartTheme } from "@/lib/chart-theme";
 import type {
   AnomalyResult,
   CohortResult,
@@ -26,14 +27,13 @@ import type {
   Summary,
 } from "@/lib/types";
 
-const ACCENT = "#fafafa";
-const MUTED = "#3a3a3a";
-const GRID = "#1f1f1f";
-const TOOLTIP_STYLE = {
-  backgroundColor: "#0a0a0a",
-  border: "1px solid #1f1f1f",
-  borderRadius: 8,
-};
+function tooltipStyle(theme: ChartTheme) {
+  return {
+    backgroundColor: theme.background,
+    border: `1px solid ${theme.border}`,
+    borderRadius: 8,
+  };
+}
 
 function fmt(x: number | undefined | null, nd = 2): string {
   if (x == null || Number.isNaN(x)) return "—";
@@ -68,6 +68,7 @@ function SegmentationSection({
   reportId: string;
 }) {
   const [drill, setDrill] = useState<{ cluster: string; title: string } | null>(null);
+  const theme = useChartTheme();
   const clusters = res.clusters ?? [];
   if (clusters.length === 0) return null;
   const chart = clusters.map((c) => ({
@@ -85,13 +86,13 @@ function SegmentationSection({
         <div className="h-64">
           <ResponsiveContainer width="100%" height="100%">
             <BarChart data={chart} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-              <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-              <XAxis dataKey="name" tick={{ fill: "#888888", fontSize: 11 }} />
-              <YAxis tick={{ fill: "#888888", fontSize: 11 }} allowDecimals={false} />
-              <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
+              <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+              <XAxis dataKey="name" tick={{ fill: theme.ticks, fontSize: 11 }} />
+              <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} allowDecimals={false} />
+              <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
               <Bar
                 dataKey="size"
-                fill={ACCENT}
+                fill={theme.accent}
                 radius={[3, 3, 0, 0]}
                 className="cursor-pointer"
                 onClick={(b) =>
@@ -165,6 +166,7 @@ function ForecastSection({
     ([k, v]) => k !== "_capped" && typeof v === "object" && v !== null && "history" in v
   ) as [string, ForecastResultEntry][];
   if (entries.length === 0) return null;
+  const theme = useChartTheme();
   return (
     <SectionCard
       title="Metric forecast"
@@ -195,14 +197,14 @@ function ForecastSection({
               <div className="h-64">
                 <ResponsiveContainer width="100%" height="100%">
                   <LineChart data={data} margin={{ top: 8, right: 8, left: -12, bottom: 0 }}>
-                    <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-                    <XAxis dataKey="label" tick={{ fill: "#888888", fontSize: 10 }} />
-                    <YAxis tick={{ fill: "#888888", fontSize: 11 }} />
-                    <Tooltip contentStyle={TOOLTIP_STYLE} />
-                    <Line type="monotone" dataKey="history" stroke={MUTED} strokeWidth={1.5} dot={false} name="History" />
-                    <Line type="monotone" dataKey="mean" stroke={ACCENT} strokeWidth={2} dot={false} name="Forecast" />
-                    <Line type="monotone" dataKey="upper" stroke={ACCENT} strokeOpacity={0.3} strokeDasharray="3 3" dot={false} name="Upper" />
-                    <Line type="monotone" dataKey="lower" stroke={ACCENT} strokeOpacity={0.3} strokeDasharray="3 3" dot={false} name="Lower" />
+                    <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fill: theme.ticks, fontSize: 10 }} />
+                    <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} />
+                    <Tooltip contentStyle={tooltipStyle(theme)} />
+                    <Line type="monotone" dataKey="history" stroke={theme.muted} strokeWidth={1.5} dot={false} name="History" />
+                    <Line type="monotone" dataKey="mean" stroke={theme.accent} strokeWidth={2} dot={false} name="Forecast" />
+                    <Line type="monotone" dataKey="upper" stroke={theme.accent} strokeOpacity={0.3} strokeDasharray="3 3" dot={false} name="Upper" />
+                    <Line type="monotone" dataKey="lower" stroke={theme.accent} strokeOpacity={0.3} strokeDasharray="3 3" dot={false} name="Lower" />
                   </LineChart>
                 </ResponsiveContainer>
               </div>
@@ -227,7 +229,7 @@ function CohortSection({ res }: { res: CohortResult }) {
       description={`Retention by cohort (first-appearance month) over periods since first appearance, for ${res.identifier_column} + ${res.date_column}.`}
     >
       {notable && (
-        <div className="mb-4 rounded-md border border-[#3a3320] bg-[#1a160c] p-3">
+        <div className="mb-4 rounded-md border border-[var(--warning-border)] bg-[var(--warning-bg)] p-3">
           <p className="text-sm">
             Most notable: the <strong>{notable.cohort}</strong> cohort drops{" "}
             {fmt(notable.drop, 1)}pp retention from period {notable.period - 1} to{" "}
@@ -257,7 +259,7 @@ function CohortSection({ res }: { res: CohortResult }) {
                 {m.retention.map((r, i) => (
                   <td
                     key={i}
-                    className={`px-3 py-2 text-right ${r >= 60 ? "text-foreground" : r >= 30 ? "text-muted" : "text-[#f87171]"}`}
+                    className={`px-3 py-2 text-right ${r >= 60 ? "text-foreground" : r >= 30 ? "text-muted" : "text-[var(--danger-fg)]"}`}
                   >
                     {r.toFixed(0)}%
                   </td>
@@ -339,6 +341,7 @@ function AnomalySection({
   reportId: string;
 }) {
   const [drill, setDrill] = useState(false);
+  const theme = useChartTheme();
   const top = res.chart_data ?? [];
   const chart = top.slice(0, 15).map((d, i) => ({ i, score: d.score }));
   return (
@@ -351,11 +354,11 @@ function AnomalySection({
           <div className="h-56">
             <ResponsiveContainer width="100%" height="100%">
               <BarChart data={chart} margin={{ top: 4, right: 8, left: -12, bottom: 0 }}>
-                <CartesianGrid stroke={GRID} strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="i" tick={{ fill: "#888888", fontSize: 10 }} />
-                <YAxis tick={{ fill: "#888888", fontSize: 11 }} />
-                <Tooltip cursor={{ fill: "rgba(250,250,250,0.06)" }} contentStyle={TOOLTIP_STYLE} />
-                <Bar dataKey="score" fill={ACCENT} radius={[3, 3, 0, 0]} />
+                <CartesianGrid stroke={theme.grid} strokeDasharray="3 3" vertical={false} />
+                <XAxis dataKey="i" tick={{ fill: theme.ticks, fontSize: 10 }} />
+                <YAxis tick={{ fill: theme.ticks, fontSize: 11 }} />
+                <Tooltip cursor={{ fill: theme.tooltipCursor }} contentStyle={tooltipStyle(theme)} />
+                <Bar dataKey="score" fill={theme.accent} radius={[3, 3, 0, 0]} />
               </BarChart>
             </ResponsiveContainer>
           </div>

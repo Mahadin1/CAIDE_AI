@@ -1,5 +1,6 @@
 "use client";
 
+import * as React from "react";
 import { usePathname } from "next/navigation";
 import { Search } from "lucide-react";
 import {
@@ -93,16 +94,18 @@ export function DashboardHeader({
           {crumbs.map((crumb, i) => {
             const last = i === crumbs.length - 1;
             return (
-              <BreadcrumbItem key={i}>
-                {last ? (
-                  <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
-                ) : (
-                  <>
-                    <BreadcrumbLink href={crumb.href ?? "#"}>{crumb.label}</BreadcrumbLink>
-                    <BreadcrumbSeparator />
-                  </>
-                )}
-              </BreadcrumbItem>
+              <React.Fragment key={i}>
+                <BreadcrumbItem>
+                  {last ? (
+                    <BreadcrumbPage>{crumb.label}</BreadcrumbPage>
+                  ) : (
+                    <BreadcrumbLink href={crumb.href ?? "#"}>
+                      {crumb.label}
+                    </BreadcrumbLink>
+                  )}
+                </BreadcrumbItem>
+                {!last && <BreadcrumbSeparator />}
+              </React.Fragment>
             );
           })}
         </BreadcrumbList>

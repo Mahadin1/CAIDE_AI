@@ -89,7 +89,7 @@ export function RowDrilldown({
 
         <div className="flex-1 overflow-auto">
           {error ? (
-            <div className="p-8 text-center text-sm text-[#f87171]">{error}</div>
+            <div className="p-8 text-center text-sm text-[var(--danger-fg)]">{error}</div>
           ) : !data ? (
             <div className="flex flex-col items-center gap-2 p-8 text-sm text-muted">
               <Loader2 className="h-5 w-5 animate-spin text-foreground" />

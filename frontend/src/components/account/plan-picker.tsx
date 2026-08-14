@@ -87,7 +87,7 @@ export function PlanPicker({ currentPlan }: { currentPlan: Plan }) {
 
   return (
     <div className="space-y-4">
-      {error && <p className="text-sm text-[#f87171]">{error}</p>}
+      {error && <p className="text-sm text-[var(--danger-fg)]">{error}</p>}
       <div className="grid gap-4 md:grid-cols-3">
         {TIERS.map((tier) => {
           const active = currentPlan === tier.id;

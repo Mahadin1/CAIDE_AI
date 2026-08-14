@@ -201,7 +201,7 @@ export default function LoginPage() {
           </form>
 
           {error && (
-            <p className="mt-4 text-center text-sm text-[#f87171]">{error}</p>
+            <p className="mt-4 text-center text-sm text-[var(--danger-fg)]">{error}</p>
           )}
           {success && (
             <p className="mt-4 text-center text-sm text-foreground">{success}</p>
