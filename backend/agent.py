@@ -18,11 +18,13 @@ Backwards compatibility: `run_eda(df)`, `classify_columns(df)` and
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 from dataclasses import dataclass, field
 from typing import Any
 
 from config import settings
+from storage_utils import SourceFile
 
 from eda.classification import classify_columns
 from eda.fingerprint import build_fingerprint
@@ -65,15 +67,26 @@ def run_eda(df: Any) -> dict[str, Any]:
 # Pipeline stages
 # ---------------------------------------------------------------------------
 
+def _split_source(
+    source: bytes | SourceFile,
+) -> tuple[bytes | None, str | None]:
+    """Normalise a raw-bytes or SourceFile input to (data, path)."""
+    if isinstance(source, SourceFile):
+        return source.data, source.path
+    return source, None
+
+
 def prepare(
-    data: bytes,
+    source: bytes | SourceFile,
     filename: str,
     storage_path: str,
 ) -> PreparedFile:
     """Load + profile the file. Synchronous (CPU-bound)."""
+    data, path = _split_source(source)
     loaded = load_dataframe(
         data,
         filename,
+        path=path,
         max_rows_full=settings.max_rows_full,
         sample_target=settings.sample_target_rows,
         seed=seed_for_path(storage_path),
@@ -192,14 +205,16 @@ def build_overview(prepared: PreparedFile, summary: dict[str, Any]) -> dict[str,
     }
 
 
-def execute(
+async def execute(
     prepared: PreparedFile,
     storage_path: str,
     overrides: dict[str, Any] | None = None,
     prior_report: dict[str, Any] | None = None,
     user_plan: str | None = None,
 ) -> dict[str, Any]:
-    """Deterministic half of the pipeline (blocking — call via to_thread).
+    """Deterministic half of the pipeline (async; heavy compute runs via
+    to_thread so the event loop stays free and per-task budgets can be
+    enforced inside the executor).
 
     Returns summary + findings + provenance. The narrative is produced
     separately by :func:`narrate_result` so the worker can keep the event
@@ -207,7 +222,7 @@ def execute(
     `user_plan` gates the heavy adaptive tasks server-side (never trusted
     from the frontend).
     """
-    summary = run_pipeline_on_frame(
+    summary = await run_pipeline_on_frame(
         prepared.loaded.df,
         loaded=prepared.loaded,
         plan_tasks=prepared.plan_tasks,
@@ -216,7 +231,7 @@ def execute(
         prior_report=prior_report,
         user_plan=user_plan,
     )
-    findings = select_findings(summary)
+    findings = await asyncio.to_thread(select_findings, summary)
     summary["findings"] = findings
     return {
         "summary": summary,
@@ -248,7 +263,7 @@ async def execute_and_narrate(
     prior_report: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convenience wrapper for small pipelines: execute + narrate."""
-    result = execute(prepared, storage_path, overrides, prior_report)
+    result = await execute(prepared, storage_path, overrides, prior_report)
     bundle = await narrate_result(prepared, result)
     result["narrative"] = bundle["narrative"]
     result["column_glossary"] = bundle["column_glossary"]
@@ -256,25 +271,27 @@ async def execute_and_narrate(
 
 
 async def prepare_plan_and_execute(
-    data: bytes,
+    source: bytes | SourceFile,
     filename: str,
     storage_path: str,
     overrides: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Convenience: prepare -> plan -> execute -> narrate in one call."""
-    prepared = prepare(data, filename, storage_path)
+    prepared = prepare(source, filename, storage_path)
     await plan_file(prepared, overrides)
     return await execute_and_narrate(prepared, storage_path, overrides)
 
 
 def load_and_classify(
-    data: bytes, filename: str, storage_path: str
+    source: bytes | SourceFile, filename: str, storage_path: str
 ) -> dict[str, Any]:
     """Load a file and classify its columns. Returns a dict with the frame,
     classification and the LoadedData (for cleanup)."""
+    data, path = _split_source(source)
     loaded = load_dataframe(
         data,
         filename,
+        path=path,
         max_rows_full=settings.max_rows_full,
         sample_target=settings.sample_target_rows,
         seed=seed_for_path(storage_path),

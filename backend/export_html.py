@@ -17,12 +17,26 @@ import re
 from datetime import datetime
 from typing import Any
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-
 MAX_CHARTS = 12
+
+_MPL_INITIALIZED = False
+
+
+def _ensure_mpl() -> None:
+    """Lazily import matplotlib on first chart build.
+
+    matplotlib adds a large chunk of import-time RSS (~50 MiB) to the process
+    even when the report never exports HTML. It is only imported here, inside
+    build_html, so an export-less process never pays that cost.
+    """
+    global _MPL_INITIALIZED
+    if _MPL_INITIALIZED:
+        return
+    import matplotlib
+    matplotlib.use("Agg")
+    global plt
+    import matplotlib.pyplot as plt  # noqa: E402
+    _MPL_INITIALIZED = True
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +199,7 @@ def build_html(
     source_format: str | None = None,
 ) -> str:
     """Build the complete self-contained HTML document."""
+    _ensure_mpl()
     shape = summary.get("shape", {})
     charts = _render_charts(summary)
     plan_tasks = plan_tasks or summary.get("executed_tasks") or []

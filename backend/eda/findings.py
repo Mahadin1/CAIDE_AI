@@ -750,6 +750,17 @@ def _multi_skill_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
         top = sorted(seg["clusters"], key=lambda c: c["size"], reverse=True)
         biggest = top[0]
         second = top[1] if len(top) > 1 else None
+        rows_used = seg.get("rows_used")
+        select_rows = seg.get("k_selection_rows")
+        subsample_note = ""
+        if select_rows is not None and rows_used and select_rows < rows_used:
+            # The report-level sample disclosure is computed once for the whole
+            # report; a task that further subsampled itself must say so, or the
+            # stated confidence figure would overstate this section's precision.
+            subsample_note = (
+                f" k was selected on {select_rows:,} of {rows_used:,} "
+                "sampled rows."
+            )
         out.append({
             **_base(
                 "auto_segmentation", "medium",
@@ -758,7 +769,8 @@ def _multi_skill_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
             "evidence": {
                 "k": seg.get("k"),
                 "silhouette": seg.get("silhouette"),
-                "rows_used": seg.get("rows_used"),
+                "rows_used": rows_used,
+                "k_selection_rows": select_rows,
                 "biggest_cluster": biggest,
             },
             "interpretation": (
@@ -769,6 +781,7 @@ def _multi_skill_findings(summary: dict[str, Any]) -> list[dict[str, Any]]:
                 + (f" A second distinct group of {second['size']:,} rows "
                    f"({_pct(second['share'])}) sits separately."
                    if second else "")
+                + subsample_note
             ),
             "action": (
                 "Use the segment labels as a candidate segmentation variable, "

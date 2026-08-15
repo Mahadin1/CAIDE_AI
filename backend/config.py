@@ -65,6 +65,25 @@ class Settings:
         self.job_stale_seconds: int = int(os.getenv("JOB_STALE_SECONDS", "1800"))
         # Narrative length cap.
         self.narrative_max_words: int = int(os.getenv("NARRATIVE_MAX_WORDS", "1200"))
+        # --- performance/resource knobs (see docs/ARCHITECTURE.md) ---
+        # Heavy transformer path for text_theme_extraction. Disabled by
+        # default: the lightweight TF-IDF fallback avoids torch + a pinned
+        # ~660MiB embedding model in the API/worker process.
+        self.text_theme_sbert: bool = os.getenv(
+            "TEXT_THEME_SBERT", "0"
+        ).lower() in ("1", "true", "yes", "on")
+        # IsolationForest parallelism. -1 = use all available CPUs.
+        self.anomaly_n_jobs: int = int(os.getenv("ANOMALY_N_JOBS", "-1"))
+        # Per-task compute budget in seconds (executor). Tasks exceeding this
+        # are recorded as skipped instead of eating the whole job timeout.
+        self.task_timeout_seconds: int = int(
+            os.getenv("TASK_TIMEOUT_SECONDS", "90")
+        )
+        # Maximum number of concurrent heavy loads (plan preview + worker)
+        # sharing the same process memory budget.
+        self.heavy_load_concurrency: int = int(
+            os.getenv("HEAVY_LOAD_CONCURRENCY", "1")
+        )
 
     @property
     def is_configured(self) -> bool:

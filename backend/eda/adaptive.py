@@ -34,6 +34,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config import settings
+
 # ---------------------------------------------------------------------------
 # 1. auto_segmentation
 # ---------------------------------------------------------------------------
@@ -42,6 +44,10 @@ SEGMENT_MIN_NUMERIC = 3
 SEGMENT_MIN_ROWS = 60
 SEGMENT_MAX_K = 8
 SEGMENT_MIN_SILHOUETTE = 0.12
+SEGMENT_SELECT_MAX_ROWS = 50_000   # k-selection never runs on more rows
+SEGMENT_SILHOUETTE_SAMPLE = 2_000  # silhouette pairwise dists capped at m^2
+SEGMENT_N_INIT = 3                 # seeded KMeans restarts per k
+SEGMENT_MB_MAX_ROWS = 50_000       # refit with MiniBatchKMeans above this
 
 
 def _numeric_cols(classification: dict[str, dict[str, Any]]) -> list[str]:
@@ -80,7 +86,7 @@ def auto_segmentation(
                       "available.",
         }
     try:
-        from sklearn.cluster import KMeans
+        from sklearn.cluster import KMeans, MiniBatchKMeans
         from sklearn.preprocessing import StandardScaler
         from sklearn.metrics import silhouette_score
     except Exception as exc:  # pragma: no cover - sklearn is a hard dep
@@ -89,18 +95,38 @@ def auto_segmentation(
     X = data[numeric].to_numpy(dtype=float)
     scaler = StandardScaler()
     Xs = scaler.fit_transform(X)
+    n = Xs.shape[0]
 
-    max_k = min(SEGMENT_MAX_K, Xs.shape[0] - 1)
+    max_k = min(SEGMENT_MAX_K, n - 1)
     if max_k < 2:
         return {"skipped": True,
                 "reason": "Too few rows to evaluate more than one cluster."}
+
+    # k-selection runs on a capped, deterministic subsample so both the
+    # KMeans fits and the O(m^2) silhouette computation stay cheap on huge
+    # frames (this task scales with rows regardless of report sample mode).
+    # The winning k is refit on ALL rows below, so cluster sizes and the
+    # per-cluster row positions always cover the full analyzed frame.
+    rng = np.random.default_rng(0)
+    if n <= SEGMENT_SELECT_MAX_ROWS:
+        select = Xs
+        select_n = n
+    else:
+        idx = rng.choice(n, size=SEGMENT_SELECT_MAX_ROWS, replace=False)
+        select = Xs[idx]
+        select_n = SEGMENT_SELECT_MAX_ROWS
 
     best_k, best_score = None, -1.0
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         for k in range(2, max_k + 1):
-            km = KMeans(n_clusters=k, n_init=10, random_state=0).fit(Xs)
-            score = silhouette_score(Xs, km.labels_)
+            km = KMeans(n_clusters=k, n_init=SEGMENT_N_INIT,
+                        random_state=0).fit(select)
+            score = silhouette_score(
+                select, km.labels_,
+                sample_size=min(SEGMENT_SILHOUETTE_SAMPLE, select_n),
+                random_state=0,
+            )
             if score > best_score:
                 best_k, best_score = k, float(score)
     if best_k is None or best_score < SEGMENT_MIN_SILHOUETTE:
@@ -113,11 +139,17 @@ def auto_segmentation(
             ),
         }
 
-    km = KMeans(n_clusters=best_k, n_init=10, random_state=0).fit(Xs)
+    if n > SEGMENT_MB_MAX_ROWS:
+        # Large frames: mini-batch refit is near-identical for cluster
+        # assignment and far cheaper than full-batch KMeans on O(n·k·d).
+        km = MiniBatchKMeans(n_clusters=best_k, n_init=SEGMENT_N_INIT,
+                             random_state=0).fit(Xs)
+    else:
+        km = KMeans(n_clusters=best_k, n_init=SEGMENT_N_INIT,
+                    random_state=0).fit(Xs)
     centers = scaler.inverse_transform(km.cluster_centers_)
     labels = km.labels_
     sizes = Counter(labels)
-    n = len(labels)
     clusters = []
     for i in range(best_k):
         clusters.append({
@@ -146,6 +178,7 @@ def auto_segmentation(
         "k": int(best_k),
         "silhouette": round(best_score, 4),
         "rows_used": int(n),
+        "k_selection_rows": int(select_n),
         "columns": numeric,
         "clusters": clusters,
         "row_positions": row_positions,
@@ -741,7 +774,7 @@ def multivariate_anomaly_detection(
         n_estimators=200,
         contamination=contamination,
         random_state=0,
-        n_jobs=1,
+        n_jobs=settings.anomaly_n_jobs,
     )
     model.fit(X)
     scores = model.score_samples(X)

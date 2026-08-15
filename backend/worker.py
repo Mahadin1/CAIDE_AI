@@ -22,17 +22,68 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from typing import Any
 
 import httpx
 
 import agent
 import db as db_ops
-from storage_utils import download_source
+from storage_utils import SourceFile, download_source
 from config import settings
 from eda.errors import FriendlyError, TransientError
 
 logger = logging.getLogger("datascope.worker")
+
+# Process-wide cap on concurrent heavy loads (plan preview + worker). Both the
+# HTTP plan preview and the job worker load full frames into the same single
+# process; this semaphore keeps at most one heavy frame alive at a time so two
+# large loads never overlap inside the same memory budget.
+heavy_load_semaphore = asyncio.Semaphore(settings.heavy_load_concurrency)
+
+
+def _memory_mib() -> tuple[int, int]:
+    """Return (RSS, HWM) in MiB for the current process."""
+    rss = hwm = 0
+    try:
+        with open("/proc/self/status") as fh:
+            for line in fh:
+                if line.startswith("VmRSS:"):
+                    rss = int(line.split()[1]) // 1024
+                elif line.startswith("VmHWM:"):
+                    hwm = int(line.split()[1]) // 1024
+    except OSError:
+        pass
+    return rss, hwm
+
+
+class StageClock:
+    """Per-stage instrumentation: structured log lines with duration + RSS.
+
+    Each transition emits ``stage, upload, dt, elapsed, rss_mib, hwm_mib`` so
+    per-stage regressions are answerable from log aggregation alone (no DB
+    schema change).
+    """
+
+    def __init__(self, upload_id: str) -> None:
+        self.upload_id = upload_id
+        self._t0 = time.monotonic()
+        self._prev = self._t0
+        rss, hwm = _memory_mib()
+        self._rss0, self._hwm0 = rss, hwm
+        logger.info("stage=start upload=%s rss_mib=%d hwm_mib=%d",
+                    upload_id, rss, hwm)
+
+    def mark(self, stage: str, extra: str = "") -> None:
+        now = time.monotonic()
+        rss, hwm = _memory_mib()
+        logger.info(
+            "stage=%s upload=%s dt=%.2fs elapsed=%.2fs rss_mib=%d "
+            "hwm_mib=%d%s",
+            stage, self.upload_id, now - self._prev, now - self._t0,
+            rss, hwm, extra,
+        )
+        self._prev = now
 
 
 class Worker:
@@ -167,71 +218,87 @@ class Worker:
         filename: str = upload["filename"]
         overrides: dict[str, Any] = upload.get("overrides_json") or {}
 
+        clock = StageClock(upload_id)
+
         db_ops.set_upload_stage(client, upload_id, "loading",
                                 "Downloading your file…", 15)
-        content = await asyncio.to_thread(
+        source = await asyncio.to_thread(
             self._download, client, storage_path, filename
         )
-        if content is None:
+        if source is None:
             raise FriendlyError(
                 "The file could not be found in secure storage. Please "
                 "upload it again.",
                 kind="storage",
             )
+        clock.mark("downloaded", f" size_mib={source.size / 1048576:.1f}")
 
-        db_ops.set_upload_stage(client, upload_id, "profiling",
-                                "Reading columns and profiling…", 30)
-        prepared = await asyncio.to_thread(
-            agent.prepare, content, filename, storage_path
-        )
         try:
-            db_ops.set_upload_meta(
-                client, upload_id,
-                file_size_bytes=len(content),
-                source_format=prepared.loaded.fmt,
-                detected_encoding=prepared.loaded.encoding,
-                row_estimate=prepared.loaded.total_rows,
-                column_count=int(prepared.loaded.df.shape[1]),
-                analysis_mode=prepared.mode,
-            )
+            # The heavy section (load + compute) runs under the shared
+            # semaphore so at most one large frame is alive in the process
+            # memory budget at a time (plan previews queue behind jobs).
+            async with heavy_load_semaphore:
+                db_ops.set_upload_stage(client, upload_id, "profiling",
+                                        "Reading columns and profiling…", 30)
+                prepared = await asyncio.to_thread(
+                    agent.prepare, source, filename, storage_path
+                )
+                try:
+                    db_ops.set_upload_meta(
+                        client, upload_id,
+                        file_size_bytes=source.size,
+                        source_format=prepared.loaded.fmt,
+                        detected_encoding=prepared.loaded.encoding,
+                        row_estimate=prepared.loaded.total_rows,
+                        column_count=int(prepared.loaded.df.shape[1]),
+                        analysis_mode=prepared.mode,
+                    )
+                    clock.mark("prepared")
 
-            db_ops.set_upload_stage(client, upload_id, "planning",
-                                    "Designing the analysis plan…", 40)
-            # Prior-report context must be attached before planning so the
-            # plan cache key matches the plan preview (same injection).
-            prior_report = await asyncio.to_thread(
-                db_ops.get_most_recent_report,
-                client, upload["user_id"], exclude_upload_id=upload_id,
-            )
-            await asyncio.to_thread(
-                agent.attach_prior_context, prepared, prior_report
-            )
-            await agent.plan_file(prepared, overrides)
-            db_ops.set_upload_meta(
-                client, upload_id,
-                analysis_plan_json={
-                    "tasks": prepared.plan_tasks,
-                    "source": prepared.plan_source,
-                    "cache_key": prepared.plan_cache_key,
-                },
-            )
+                    db_ops.set_upload_stage(client, upload_id, "planning",
+                                            "Designing the analysis plan…", 40)
+                    # Prior-report context must be attached before planning so
+                    # the plan cache key matches the plan preview (same
+                    # injection).
+                    prior_report = await asyncio.to_thread(
+                        db_ops.get_most_recent_report,
+                        client, upload["user_id"], exclude_upload_id=upload_id,
+                    )
+                    await asyncio.to_thread(
+                        agent.attach_prior_context, prepared, prior_report
+                    )
+                    await agent.plan_file(prepared, overrides)
+                    db_ops.set_upload_meta(
+                        client, upload_id,
+                        analysis_plan_json={
+                            "tasks": prepared.plan_tasks,
+                            "source": prepared.plan_source,
+                            "cache_key": prepared.plan_cache_key,
+                        },
+                    )
+                    clock.mark("planned")
 
-            db_ops.set_upload_stage(client, upload_id, "computing",
-                                    "Computing statistics and running tests…", 70)
-            # Server-side tier gating for the heavy adaptive tasks: the plan
-            # is fetched from the owner's profile, never trusted from the UI.
-            profile = await asyncio.to_thread(
-                db_ops.get_profile, client, upload["user_id"]
-            )
-            user_plan = (profile or {}).get("plan") if profile else None
-            result = await asyncio.to_thread(
-                agent.execute, prepared, storage_path, overrides, prior_report,
-                user_plan,
-            )
+                    db_ops.set_upload_stage(client, upload_id, "computing",
+                                            "Computing statistics and running tests…", 70)
+                    # Server-side tier gating for the heavy adaptive tasks:
+                    # the plan is fetched from the owner's profile, never
+                    # trusted from the UI.
+                    profile = await asyncio.to_thread(
+                        db_ops.get_profile, client, upload["user_id"]
+                    )
+                    user_plan = (profile or {}).get("plan") if profile else None
+                    result = await agent.execute(
+                        prepared, storage_path, overrides, prior_report,
+                        user_plan,
+                    )
+                    clock.mark("computed")
+                finally:
+                    await asyncio.to_thread(agent.dispose, prepared)
 
             db_ops.set_upload_stage(client, upload_id, "narrating",
                                     "Writing the plain-English report…", 90)
             narration = await agent.narrate_result(prepared, result)
+            clock.mark("narrated")
 
             db_ops.set_upload_stage(client, upload_id, "persisting",
                                     "Saving your report…", 98)
@@ -265,15 +332,16 @@ class Worker:
                 logger.warning("failed to decrement credit for user=%s",
                                upload["user_id"])
 
+            clock.mark("persisted")
             logger.info("analysis done upload=%s report=%s", upload_id,
                         report["id"])
         finally:
-            await asyncio.to_thread(agent.dispose, prepared)
+            source.cleanup()
 
     # -- helpers -----------------------------------------------------------
 
     @staticmethod
-    def _download(client: Any, storage_path: str, filename: str) -> bytes | None:
+    def _download(client: Any, storage_path: str, filename: str) -> SourceFile | None:
         try:
             return download_source(client, storage_path)
         except FriendlyError:

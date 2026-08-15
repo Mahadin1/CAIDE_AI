@@ -11,6 +11,8 @@ silently dropped — so the narrative can explain what was chosen and why.
 """
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import warnings
 from typing import Any
@@ -18,6 +20,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config import settings
 from eda import tests as stat_tests
 from eda import text as text_analysis
 from eda import dates as dates_analysis
@@ -31,7 +34,22 @@ from eda.classification import classify_columns
 from eda import advanced as advanced_tasks
 from eda.gating import adaptive_task_tier, meets_tier
 
+logger = logging.getLogger("datascope.executor")
+
 ROBUST_Z_THRESHOLD = 3.5
+
+# Tasks whose cost grows with the frame and get their own time budget. A task
+# exceeding it is recorded as *skipped* (with a reason) and the job continues
+# instead of one slow section eating the whole job timeout.
+_HEAVY_TASKS = {
+    "auto_segmentation",
+    "forecast_metric",
+    "cohort_retention",
+    "group_significance_test",
+    "multivariate_anomaly_detection",
+    "text_theme_extraction",
+    "distribution_drift",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +390,7 @@ def _execute_task(
                           "this data (numerical limitation), so it was skipped."}
 
 
-def execute_plan(
+async def execute_plan(
     df: pd.DataFrame,
     classification: dict[str, dict[str, Any]],
     plan_tasks: list[dict[str, Any]],
@@ -381,11 +399,15 @@ def execute_plan(
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     """Run the backbone + plan. Returns (summary, executed, skipped).
 
+    Heavy tasks get their own time budget (``settings.task_timeout_seconds``);
+    a task that exceeds it is recorded as *skipped* and the job continues, so
+    one slow section can never consume the whole job timeout.
+
     `user_plan` is the owner's subscription plan. Adaptive tasks gated to a
     paid tier (see eda/gating.py) are skipped with an explicit reason when the
     plan is below the required tier — never silently dropped, never forced.
     """
-    summary = run_backbone(df, classification)
+    summary = await asyncio.to_thread(run_backbone, df, classification)
     if prior_report:
         # Private scratch key consumed by the distribution_drift task; it is
         # stripped again below so it is never persisted into summary_json.
@@ -404,7 +426,30 @@ def execute_plan(
                           "higher plan.",
             })
             continue
-        result = _execute_task(task, summary, df, classification)
+        if ttype in _HEAVY_TASKS:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        _execute_task, task, summary, df, classification
+                    ),
+                    timeout=settings.task_timeout_seconds,
+                )
+            except asyncio.TimeoutError:
+                logger.warning("task %s timed out after %ss",
+                               ttype, settings.task_timeout_seconds)
+                skipped.append({
+                    "id": task["id"], "type": ttype,
+                    "reason": (
+                        f"This analysis exceeded the "
+                        f"{settings.task_timeout_seconds}s compute budget and "
+                        "was skipped so the report could still be completed."
+                    ),
+                })
+                continue
+        else:
+            result = await asyncio.to_thread(
+                _execute_task, task, summary, df, classification
+            )
         if result and result.get("skipped"):
             skipped.append({"id": task["id"], "type": ttype,
                             "reason": result["reason"]})
@@ -432,11 +477,11 @@ def execute_plan(
         for t in executed
     ]
     summary["skipped_tasks"] = skipped
-    summary["chart_specs"] = build_chart_specs(summary)
+    summary["chart_specs"] = await asyncio.to_thread(build_chart_specs, summary)
     return summary, executed, skipped
 
 
-def run_pipeline_on_frame(
+async def run_pipeline_on_frame(
     df: pd.DataFrame,
     *,
     loaded,
@@ -456,16 +501,16 @@ def run_pipeline_on_frame(
     overrides = overrides or {}
 
     # Apply exclusions + validated column-type overrides.
-    df, override_kinds = apply_overrides(df, overrides)
+    df, override_kinds = await asyncio.to_thread(apply_overrides, df, overrides)
 
-    classification = classify_columns(df)
+    classification = await asyncio.to_thread(classify_columns, df)
     for col, kind in override_kinds.items():
         if col in classification:
             base = classification[col]
             # Preserve cardinality/total; swap kind.
             classification[col] = {**base, "kind": kind}
 
-    summary, executed, skipped = execute_plan(
+    summary, executed, skipped = await execute_plan(
         df, classification, plan_tasks, prior_report=prior_report,
         user_plan=user_plan,
     )

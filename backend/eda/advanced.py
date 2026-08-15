@@ -23,6 +23,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from config import settings
+
 logger = logging.getLogger("datascope.advanced")
 
 # ---------------------------------------------------------------------------
@@ -295,19 +297,9 @@ def data_quality_score(
 # text_theme_extraction
 # ---------------------------------------------------------------------------
 
-_EMBED_MODEL: Any | None = None
 TEXT_SAMPLE_CAP = 2000
 TEXT_MIN_ROWS = 30
-
-
-def _embed_model():
-    global _EMBED_MODEL
-    if _EMBED_MODEL is None:
-        from sentence_transformers import SentenceTransformer
-        _EMBED_MODEL = SentenceTransformer(
-            "sentence-transformers/all-MiniLM-L6-v2"
-        )
-    return _EMBED_MODEL
+_TFIDF_MAX_FEATURES = 1000
 
 
 def _pca_scores(X: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
@@ -320,14 +312,48 @@ def _pca_scores(X: np.ndarray, k: int) -> tuple[np.ndarray, np.ndarray]:
     return scores, evr
 
 
+def _tfidf_theme_scores(
+    corpus: list[str], k: int
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Lightweight theme space: TF-IDF + truncated SVD (no torch, no model
+    download, single-digit MiB). Returns (scores n×k, explained-variance)."""
+    from sklearn.decomposition import TruncatedSVD
+    from sklearn.feature_extraction.text import TfidfVectorizer
+
+    vec = TfidfVectorizer(
+        stop_words="english", max_features=_TFIDF_MAX_FEATURES,
+        ngram_range=(1, 2),
+    )
+    X = vec.fit_transform(corpus)
+    if X.shape[0] < 2 or X.shape[1] < 2:
+        return None
+    svd = TruncatedSVD(n_components=k, random_state=0)
+    scores = svd.fit_transform(X)
+    return scores, svd.explained_variance_ratio_
+
+
+def _load_sbert_model():
+    """Load the sentence-transformer model for one call only (never pinned
+    for the process lifetime). Only used when TEXT_THEME_SBERT=1 — the
+    lightweight TF-IDF path is the default so torch never enters this
+    process. This path belongs on a dedicated worker with its own memory
+    budget, not next to the API/job worker."""
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+
+
 def text_themes(
     df: pd.DataFrame, classification: dict[str, dict[str, Any]]
 ) -> dict[str, Any]:
     """Embed a free-text column locally and reduce to latent themes via PCA.
 
-    Reports the *actual* explained variance and, per theme, the 2–3 real rows
-    that load highest on it as human-readable anchors. Only runs when a
-    free_text column exists (proposed by the planner, not forced in fallback).
+    Default path is a pure-sklearn TF-IDF + TruncatedSVD reduction (no torch,
+    no model download). Setting TEXT_THEME_SBERT=1 switches to the
+    sentence-transformers embeddings instead. Reports the *actual* explained
+    variance and, per theme, the 2–3 real rows that load highest on it as
+    human-readable anchors. Only runs when a free_text column exists
+    (proposed by the planner, not forced in fallback).
     """
     text_cols = [
         c for c, info in classification.items()
@@ -337,13 +363,18 @@ def text_themes(
     out: dict[str, Any] = {}
     if not text_cols:
         return out
-    try:
-        model = _embed_model()
-    except Exception as exc:  # pragma: no cover - offline env
-        logger.warning("embedding model unavailable: %s", exc)
-        return {"skipped": True,
-                "reason": "Text embedding model is not available in this "
-                          "environment, so theme extraction was skipped."}
+
+    use_sbert = settings.text_theme_sbert
+    model = None
+    if use_sbert:
+        try:
+            model = _load_sbert_model()
+        except Exception as exc:  # pragma: no cover - offline env
+            logger.warning(
+                "SBERT theme path unavailable (%s); falling back to "
+                "TF-IDF themes", exc,
+            )
+            use_sbert = False
 
     for col in text_cols:
         try:
@@ -354,13 +385,33 @@ def text_themes(
             if len(texts) > TEXT_SAMPLE_CAP:
                 texts = texts.sample(TEXT_SAMPLE_CAP, random_state=1)
             corpus = texts.tolist()
-            vectors = model.encode(corpus, normalize_embeddings=True,
-                                   show_progress_bar=False)
-            X = np.asarray(vectors, dtype=np.float64)
-            k = min(5, X.shape[0] - 1, X.shape[1])
-            if k < 2:
-                continue
-            scores, evr = _pca_scores(X, k)
+            if use_sbert:
+                vectors = model.encode(corpus, normalize_embeddings=True,
+                                       show_progress_bar=False)
+                X = np.asarray(vectors, dtype=np.float64)
+                k = min(5, X.shape[0] - 1, X.shape[1])
+                if k < 2:
+                    continue
+                scores, evr = _pca_scores(X, k)
+                method = (
+                    "Embedded with sentence-transformers/all-MiniLM-L6-V2 "
+                    "(local, no API calls) then PCA-reduced; explained "
+                    "variance is the measured share of total variance per "
+                    "component."
+                )
+            else:
+                k = min(5, len(corpus) - 1, _TFIDF_MAX_FEATURES)
+                if k < 2:
+                    continue
+                svd_result = _tfidf_theme_scores(corpus, k)
+                if svd_result is None:
+                    continue
+                scores, evr = svd_result
+                method = (
+                    "TF-IDF weighted terms reduced with TruncatedSVD "
+                    "(lightweight, no embedding model); explained variance "
+                    "is the measured share of total variance per component."
+                )
             cumulative = float(np.sum(evr))
             if cumulative < 0.05:
                 # Nearly no shared structure — reporting themes would be noise.
@@ -381,11 +432,7 @@ def text_themes(
                 "explained_variance": [round(float(v), 4) for v in evr],
                 "cumulative_explained_variance": round(cumulative, 4),
                 "themes": themes,
-                "method": (
-                    "Embedded with sentence-transformers/all-MiniLM-L6-V2 "
-                    "(local, no API calls) then PCA-reduced; explained variance "
-                    "is the measured share of total variance per component."
-                ),
+                "method": method,
             }
         except Exception as exc:  # pragma: no cover
             logger.warning("theme extraction failed for %s: %s", col, exc)

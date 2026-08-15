@@ -36,7 +36,7 @@ from eda.gating import credit_cost, meets_tier, required_tier, qa_credits_for_pl
 from eda import initiated, joinskill, qa as qa_skill
 from export_html import build_html
 from webhooks import router as paddle_router
-from worker import worker
+from worker import heavy_load_semaphore, worker
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("datascope")
@@ -268,75 +268,82 @@ async def analyze_plan(req: AnalyzePlanRequest) -> dict[str, Any]:
         )
     _check_quota(client, req.user_id)
 
-    content = download_source(client, req.storage_path)
-    if content is None:
+    source = download_source(client, req.storage_path)
+    if source is None:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="File not found in storage",
         )
 
-    prepared = await asyncio.to_thread(
-        agent.prepare, content, req.filename or "", req.storage_path
-    )
+    prepared = None
     try:
-        # Prior-report context so the planner can propose distribution_drift.
-        prior_report = db_ops.get_most_recent_report(
-            client, req.user_id, exclude_upload_id=str(upload_id)
-        )
-        await asyncio.to_thread(
-            agent.attach_prior_context, prepared, prior_report
-        )
-        await agent.plan_file(prepared, req.overrides)
-
-        overrides = req.overrides or {}
-        # The upload row already exists when the file was saved first (status
-        # 'ready'); plan again just updates its metadata. Otherwise insert.
-        existing = db_ops.get_upload(client, str(upload_id))
-        if existing is None:
-            db_ops.insert_upload(
-                client, upload_id, req.user_id,
-                req.filename or req.storage_path.rsplit("/", 1)[-1],
-                req.storage_path, "ready",
+        # Heavy loads (plan preview + worker) are serialised through a shared
+        # semaphore so two large frames never share the process memory budget.
+        async with heavy_load_semaphore:
+            prepared = await asyncio.to_thread(
+                agent.prepare, source, req.filename or "", req.storage_path
             )
-        db_ops.set_upload_meta(
-            client, upload_id,
-            stage="review",
-            stage_label="Ready to analyze",
-            progress=40,
-            file_size_bytes=len(content),
-            source_format=prepared.loaded.fmt,
-            detected_encoding=prepared.loaded.encoding,
-            row_estimate=prepared.loaded.total_rows,
-            column_count=int(prepared.loaded.df.shape[1]),
-            analysis_mode=prepared.mode,
-            analysis_plan_json={
-                "tasks": prepared.plan_tasks,
-                "source": prepared.plan_source,
-                "cache_key": prepared.plan_cache_key,
-            },
-            overrides_json=overrides or None,
-        )
+            try:
+                # Prior-report context so the planner can propose distribution_drift.
+                prior_report = db_ops.get_most_recent_report(
+                    client, req.user_id, exclude_upload_id=str(upload_id)
+                )
+                await asyncio.to_thread(
+                    agent.attach_prior_context, prepared, prior_report
+                )
+                await agent.plan_file(prepared, req.overrides)
 
-        return {
-            "job_id": upload_id,
-            "fingerprint": prepared.fingerprint,
-            "plan": {
-                "tasks": prepared.plan_tasks,
-                "source": prepared.plan_source,
-            },
-            "column_types": agent.column_type_map(prepared),
-            "overview": {
-                "format": prepared.loaded.fmt,
-                "encoding": prepared.loaded.encoding,
-                "mode": prepared.mode,
-                "sample_info": prepared.sample_info,
-                "shape": {
-                    "rows": int(len(prepared.loaded.df)),
-                    "total_rows": prepared.loaded.total_rows,
-                    "columns": int(prepared.loaded.df.shape[1]),
-                },
-            },
-        }
+                overrides = req.overrides or {}
+                # The upload row already exists when the file was saved first (status
+                # 'ready'); plan again just updates its metadata. Otherwise insert.
+                existing = db_ops.get_upload(client, str(upload_id))
+                if existing is None:
+                    db_ops.insert_upload(
+                        client, upload_id, req.user_id,
+                        req.filename or req.storage_path.rsplit("/", 1)[-1],
+                        req.storage_path, "ready",
+                    )
+                db_ops.set_upload_meta(
+                    client, upload_id,
+                    stage="review",
+                    stage_label="Ready to analyze",
+                    progress=40,
+                    file_size_bytes=source.size,
+                    source_format=prepared.loaded.fmt,
+                    detected_encoding=prepared.loaded.encoding,
+                    row_estimate=prepared.loaded.total_rows,
+                    column_count=int(prepared.loaded.df.shape[1]),
+                    analysis_mode=prepared.mode,
+                    analysis_plan_json={
+                        "tasks": prepared.plan_tasks,
+                        "source": prepared.plan_source,
+                        "cache_key": prepared.plan_cache_key,
+                    },
+                    overrides_json=overrides or None,
+                )
+
+                return {
+                    "job_id": upload_id,
+                    "fingerprint": prepared.fingerprint,
+                    "plan": {
+                        "tasks": prepared.plan_tasks,
+                        "source": prepared.plan_source,
+                    },
+                    "column_types": agent.column_type_map(prepared),
+                    "overview": {
+                        "format": prepared.loaded.fmt,
+                        "encoding": prepared.loaded.encoding,
+                        "mode": prepared.mode,
+                        "sample_info": prepared.sample_info,
+                        "shape": {
+                            "rows": int(len(prepared.loaded.df)),
+                            "total_rows": prepared.loaded.total_rows,
+                            "columns": int(prepared.loaded.df.shape[1]),
+                        },
+                    },
+                }
+            finally:
+                await asyncio.to_thread(agent.dispose, prepared)
     except FriendlyError as exc:
         return _friendly_response(exc)
     except Exception as exc:  # noqa: BLE001
@@ -346,7 +353,7 @@ async def analyze_plan(req: AnalyzePlanRequest) -> dict[str, Any]:
             detail="Could not prepare an analysis plan. Please try again.",
         ) from exc
     finally:
-        await asyncio.to_thread(agent.dispose, prepared)
+        source.cleanup()
 
 
 @app.post("/analyze", response_model=AnalyzeResponse)
@@ -526,14 +533,14 @@ async def download_clean(
     row = _get_report_owned(client, report_id, user_id)
     upload = row["uploads"]
 
-    content = download_source(client, upload["storage_path"])
-    if content is None:
+    source = download_source(client, upload["storage_path"])
+    if source is None:
         raise HTTPException(status_code=404, detail="Source file not found")
 
     loaded = None
     try:
         loaded = await asyncio.to_thread(
-            agent.load_and_classify, content, upload["filename"],
+            agent.load_and_classify, source, upload["filename"],
             upload["storage_path"],
         )
         cleaned = await asyncio.to_thread(
@@ -545,6 +552,7 @@ async def download_clean(
     finally:
         if loaded and loaded.get("loaded"):
             await asyncio.to_thread(agent.dispose, loaded["loaded"])
+        source.cleanup()
 
     safe = upload["filename"].replace("/", "_").replace("\\", "_")
     return Response(
@@ -636,8 +644,8 @@ async def report_subset(
     row = _get_report_owned(client, report_id, user_id)
     upload = row["uploads"]
 
-    content = download_source(client, upload["storage_path"])
-    if content is None:
+    source = download_source(client, upload["storage_path"])
+    if source is None:
         raise HTTPException(status_code=404, detail="Source file not found")
 
     indices_list: list[int] | None = None
@@ -652,7 +660,7 @@ async def report_subset(
     loaded = None
     try:
         loaded = await asyncio.to_thread(
-            agent.load_and_classify, content, upload["filename"],
+            agent.load_and_classify, source, upload["filename"],
             upload["storage_path"],
         )
         if indices_list is None:
@@ -666,6 +674,7 @@ async def report_subset(
     finally:
         if loaded and loaded.get("loaded"):
             await asyncio.to_thread(agent.dispose, loaded["loaded"])
+        source.cleanup()
 
     return {"column": column, "value": value, "rows": rows, "count": len(rows)}
 
@@ -716,10 +725,16 @@ def _check_skill_gate(client, user_id: str, skill: str) -> dict[str, Any]:
 
 def _load_source(client, storage_path: str, filename: str) -> dict[str, Any]:
     """Download + load + classify a stored source file (blocking)."""
-    content = download_source(client, storage_path)
-    if content is None:
+    source = download_source(client, storage_path)
+    if source is None:
         raise HTTPException(status_code=404, detail="File not found in storage")
-    return agent.load_and_classify(content, filename, storage_path)
+    try:
+        return agent.load_and_classify(source, filename, storage_path)
+    except Exception:
+        # Only reachable on failure — on success the loader owns the path and
+        # dispose() removes it; on failure nothing claimed it, so clean up.
+        source.cleanup()
+        raise
 
 
 @app.post("/reports/{report_id}/skills/{skill}")

@@ -71,6 +71,12 @@ def _peek(data: bytes, n: int = 4096) -> bytes:
     return data[:n]
 
 
+def _read_file_head(path: str, n: int) -> bytes:
+    """Read the first ``n`` bytes of a spooled file (for detection)."""
+    with open(path, "rb") as fh:
+        return fh.read(n)
+
+
 def detect_format(data: bytes, filename: str = "") -> str:
     """Identify the actual file format from content (not extension)."""
     head = _peek(data)
@@ -108,14 +114,19 @@ def detect_format(data: bytes, filename: str = "") -> str:
     return "csv"  # text table — delimiter sniffing happens next
 
 
-def sniff_delimiter(data: bytes) -> str:
+def sniff_delimiter(data: bytes | None = None, path: str | None = None) -> str:
     """Pick the delimiter from a sample of text lines.
 
     Tabs are preferred when they are consistent, otherwise the most frequent
     of `,` and `;` outside double quotes wins.
     """
     try:
-        sample = data[:64 * 1024].decode("utf-8", errors="replace")
+        if data is not None:
+            sample = data[:64 * 1024].decode("utf-8", errors="replace")
+        else:
+            sample = _read_file_head(path or "", 64 * 1024).decode(
+                "utf-8", errors="replace"
+            )
     except Exception:
         return ","
     lines = [ln for ln in sample.splitlines() if ln.strip()][:50]
@@ -141,9 +152,12 @@ def sniff_delimiter(data: bytes) -> str:
     return ","
 
 
-def detect_encoding(data: bytes) -> str:
+def detect_encoding(data: bytes | None = None, path: str | None = None) -> str:
     """Best-effort encoding detection with a UTF-8 default."""
-    sample = _peek(data, 20000)
+    if data is not None:
+        sample = _peek(data, 20000)
+    else:
+        sample = _read_file_head(path or "", 20000)
     if sample.startswith(b"\xef\xbb\xbf"):
         return "utf-8-sig"
     result = charset_from_bytes(sample).best()
@@ -228,7 +242,12 @@ def _read_text_safe(
         raise FriendlyError("The file contains no data rows.", kind="empty_file") from exc
 
 
-def _load_json(data: bytes, encoding: str, max_rows: int) -> pd.DataFrame:
+def _load_json(
+    data: bytes | None, encoding: str, max_rows: int, path: str | None = None
+) -> pd.DataFrame:
+    if data is None:
+        with open(path or "", "rb") as fh:
+            data = fh.read()
     try:
         text = data.decode(encoding or "utf-8")
     except UnicodeDecodeError:
@@ -312,8 +331,9 @@ def _estimate_text_rows(
         newlines = text.count("\n")
         if newlines <= 1:
             return 0
-        if len(sample) < len(data if temp_path is None else b"\0" * os.path.getsize(temp_path)):
-            ratio = len(data if temp_path is None else os.path.getsize(temp_path)) / len(sample)
+        total = len(data) if temp_path is None else os.path.getsize(temp_path)
+        if len(sample) < total:
+            ratio = total / len(sample)
             return int(newlines * ratio)
         return newlines
     except Exception:
@@ -370,24 +390,35 @@ def _two_pass_sample(
 
 
 def load_dataframe(
-    data: bytes,
+    data: bytes | None,
     filename: str = "",
     *,
+    path: str | None = None,
     max_rows_full: int = 1_000_000,
     sample_target: int = 200_000,
     seed: int | None = None,
     max_cols: int = 500,
 ) -> LoadedData:
-    """Load a file's bytes into a DataFrame, deciding full-vs-sample.
+    """Load a file into a DataFrame, deciding full-vs-sample.
+
+    ``data`` carries the file as in-memory bytes (small files). Alternatively
+    ``path`` points at a spooled copy on disk (large downloads) — the loader
+    then reads detection samples and streaming chunks straight from the file
+    and never materialises the full bytes. Exactly one of ``data``/``path``
+    must be provided. ``temp_path`` on the returned :class:`LoadedData`
+    references ``path`` when given, so cleanup_loaded() removes it.
 
     Raises :class:`FriendlyError` for malformed/unsupported/empty files.
     """
-    if not data:
+    if data is None and path is None:
+        raise FriendlyError("The file is empty.", kind="empty_file")
+    head = data[:4096] if data is not None else _read_file_head(path or "", 4096)
+    if not head:
         raise FriendlyError("The file is empty.", kind="empty_file")
 
-    fmt = detect_format(data, filename)
-    temp_path: str | None = None
-    if len(data) > SPOOL_THRESHOLD and fmt in _TEXT_FORMATS:
+    fmt = detect_format(head, filename)
+    temp_path: str | None = path
+    if data is not None and len(data) > SPOOL_THRESHOLD and fmt in _TEXT_FORMATS:
         temp_path = _spool(data)
 
     try:
@@ -396,13 +427,13 @@ def load_dataframe(
         warnings: list[str] = []
 
         if fmt in _TEXT_FORMATS:
-            encoding = detect_encoding(data)
-            sep = sniff_delimiter(data)
+            encoding = detect_encoding(data, path)
+            sep = sniff_delimiter(data, path)
             if fmt == "tsv" and sep != "\t":
                 sep = "\t"
             if fmt == "csv":
                 # Re-sniff: extension may have lied about the delimiter.
-                detected = sniff_delimiter(data)
+                detected = sniff_delimiter(data, path)
                 if detected == "\t":
                     fmt, sep = "tsv", "\t"
                 elif detected == ";":
@@ -435,8 +466,8 @@ def load_dataframe(
                 raise FriendlyError("The file contains no data rows.", kind="empty_file")
 
         elif fmt == "json":
-            encoding = detect_encoding(data)
-            df = _load_json(data, encoding, max_rows_full)
+            encoding = detect_encoding(data, path)
+            df = _load_json(data, encoding, max_rows_full, path)
 
         elif fmt in ("xlsx", "xls", "ods"):
             encoding = None
